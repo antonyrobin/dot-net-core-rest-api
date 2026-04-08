@@ -6,8 +6,12 @@ using Microsoft.EntityFrameworkCore;
 var builder = WebApplication.CreateBuilder(args);
 
 // ---------- Database ----------
+var connectionString = Environment.GetEnvironmentVariable("POSTGRES_DB_URL")
+    ?? builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("Database connection string not configured. Set the DATABASE_URL environment variable.");
+
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseNpgsql(connectionString));
 
 // ---------- Services (DI) ----------
 builder.Services.AddScoped<ICategoryRepository, CategoryRepository>();
