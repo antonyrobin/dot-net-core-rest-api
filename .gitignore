@@ -67,3 +67,7 @@ ScaffoldingReadMe.txt
 
 # dotnet tool
 .config/dotnet-tools.json
+
+# Test coverage reports
+**/coverage/
+**/TestResults/
