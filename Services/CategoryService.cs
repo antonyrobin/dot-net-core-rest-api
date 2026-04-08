@@ -1,27 +1,20 @@
-using dot_net_core_rest_api.Data;
 using dot_net_core_rest_api.Dtos;
 using dot_net_core_rest_api.Entities;
-using Microsoft.EntityFrameworkCore;
+using dot_net_core_rest_api.Repositories;
 
 namespace dot_net_core_rest_api.Services;
 
-public class CategoryService(AppDbContext db, ILogger<CategoryService> logger) : ICategoryService
+public class CategoryService(ICategoryRepository repository, ILogger<CategoryService> logger) : ICategoryService
 {
     public async Task<List<CategoryDto>> GetAllAsync(CancellationToken ct)
     {
-        return await db.Categories
-            .AsNoTracking()
-            .OrderBy(c => c.Name)
-            .Select(c => ToDto(c))
-            .ToListAsync(ct);
+        var categories = await repository.GetAllAsync(ct);
+        return categories.Select(ToDto).ToList();
     }
 
     public async Task<CategoryDto?> GetByIdAsync(int id, CancellationToken ct)
     {
-        var category = await db.Categories
-            .AsNoTracking()
-            .FirstOrDefaultAsync(c => c.Id == id, ct);
-
+        var category = await repository.GetByIdAsync(id, ct);
         return category is null ? null : ToDto(category);
     }
 
@@ -34,8 +27,7 @@ public class CategoryService(AppDbContext db, ILogger<CategoryService> logger) :
             CreatedAt = DateTime.UtcNow
         };
 
-        db.Categories.Add(category);
-        await db.SaveChangesAsync(ct);
+        await repository.CreateAsync(category, ct);
 
         logger.LogInformation("Category created: {CategoryId} {CategoryCode}", category.Id, category.Code);
 
@@ -44,7 +36,7 @@ public class CategoryService(AppDbContext db, ILogger<CategoryService> logger) :
 
     public async Task<CategoryDto?> UpdateAsync(int id, UpdateCategoryRequest request, CancellationToken ct)
     {
-        var category = await db.Categories.FindAsync([id], ct);
+        var category = await repository.GetByIdAsync(id, ct);
         if (category is null)
             return null;
 
@@ -54,7 +46,7 @@ public class CategoryService(AppDbContext db, ILogger<CategoryService> logger) :
         if (request.Name is not null)
             category.Name = request.Name;
 
-        await db.SaveChangesAsync(ct);
+        await repository.UpdateAsync(category, ct);
 
         logger.LogInformation("Category updated: {CategoryId}", category.Id);
 
@@ -63,16 +55,12 @@ public class CategoryService(AppDbContext db, ILogger<CategoryService> logger) :
 
     public async Task<bool> DeleteAsync(int id, CancellationToken ct)
     {
-        var category = await db.Categories.FindAsync([id], ct);
-        if (category is null)
-            return false;
+        var deleted = await repository.DeleteAsync(id, ct);
 
-        db.Categories.Remove(category);
-        await db.SaveChangesAsync(ct);
+        if (deleted)
+            logger.LogInformation("Category deleted: {CategoryId}", id);
 
-        logger.LogInformation("Category deleted: {CategoryId}", category.Id);
-
-        return true;
+        return deleted;
     }
 
     private static CategoryDto ToDto(Category c) => new(c.Id, c.CreatedAt, c.Code, c.Name);

@@ -1,4 +1,5 @@
 using dot_net_core_rest_api.Data;
+using dot_net_core_rest_api.Repositories;
 using dot_net_core_rest_api.Services;
 using Microsoft.EntityFrameworkCore;
 
@@ -9,6 +10,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 // ---------- Services (DI) ----------
+builder.Services.AddScoped<ICategoryRepository, CategoryRepository>();
 builder.Services.AddScoped<ICategoryService, CategoryService>();
 
 // ---------- Controllers & OpenAPI ----------
