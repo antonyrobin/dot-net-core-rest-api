@@ -2,6 +2,7 @@ using dot_net_core_rest_api.Data;
 using dot_net_core_rest_api.Repositories;
 using dot_net_core_rest_api.Services;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,9 +14,14 @@ var connectionString = Environment.GetEnvironmentVariable("POSTGRES_DB_URL")
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(connectionString));
 
+// ---------- NpgsqlDataSource (raw SQL) ----------
+builder.Services.AddSingleton(NpgsqlDataSource.Create(connectionString));
+
 // ---------- Services (DI) ----------
 builder.Services.AddScoped<ICategoryRepository, CategoryRepository>();
 builder.Services.AddScoped<ICategoryService, CategoryService>();
+builder.Services.AddScoped<ISubCategoryRepository, SubCategoryRepository>();
+builder.Services.AddScoped<ISubCategoryService, SubCategoryService>();
 
 // ---------- Controllers & OpenAPI ----------
 builder.Services.AddControllers();
