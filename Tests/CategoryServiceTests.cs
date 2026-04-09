@@ -1,3 +1,4 @@
+using dot_net_core_rest_api.Data;
 using dot_net_core_rest_api.Dtos;
 using dot_net_core_rest_api.Entities;
 using dot_net_core_rest_api.Repositories;
@@ -10,12 +11,13 @@ namespace dot_net_core_rest_api.Tests;
 public class CategoryServiceTests
 {
     private readonly Mock<ICategoryRepository> _repoMock = new();
+    private readonly Mock<IUnitOfWork> _unitOfWorkMock = new();
     private readonly Mock<ILogger<CategoryService>> _loggerMock = new();
     private readonly CategoryService _service;
 
     public CategoryServiceTests()
     {
-        _service = new CategoryService(_repoMock.Object, _loggerMock.Object);
+        _service = new CategoryService(_repoMock.Object, _unitOfWorkMock.Object, _loggerMock.Object);
     }
 
     // ───── GetAllAsync ─────
@@ -83,6 +85,8 @@ public class CategoryServiceTests
         var request = new CreateCategoryRequest("NEW", "New Category");
         _repoMock.Setup(r => r.CreateAsync(It.IsAny<Category>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Category c, CancellationToken _) => { c.Id = 10; return c; });
+        _unitOfWorkMock.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
 
         var result = await _service.CreateAsync(request, CancellationToken.None);
 
@@ -90,6 +94,7 @@ public class CategoryServiceTests
         Assert.Equal("NEW", result.Code);
         Assert.Equal("New Category", result.Name);
         _repoMock.Verify(r => r.CreateAsync(It.IsAny<Category>(), It.IsAny<CancellationToken>()), Times.Once);
+        _unitOfWorkMock.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ───── UpdateAsync ─────
@@ -100,6 +105,8 @@ public class CategoryServiceTests
         var entity = new Category { Id = 1, CreatedAt = DateTime.UtcNow, Code = "OLD", Name = "Old Name" };
         _repoMock.Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(entity);
+        _unitOfWorkMock.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
 
         var request = new UpdateCategoryRequest("UPD", "Updated Name");
         var result = await _service.UpdateAsync(1, request, CancellationToken.None);
@@ -108,6 +115,7 @@ public class CategoryServiceTests
         Assert.Equal("UPD", result!.Code);
         Assert.Equal("Updated Name", result.Name);
         _repoMock.Verify(r => r.UpdateAsync(It.IsAny<Category>(), It.IsAny<CancellationToken>()), Times.Once);
+        _unitOfWorkMock.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -116,6 +124,8 @@ public class CategoryServiceTests
         var entity = new Category { Id = 1, CreatedAt = DateTime.UtcNow, Code = "OLD", Name = "Keep This" };
         _repoMock.Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(entity);
+        _unitOfWorkMock.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
 
         var request = new UpdateCategoryRequest("NEW", null);
         var result = await _service.UpdateAsync(1, request, CancellationToken.None);
@@ -130,6 +140,8 @@ public class CategoryServiceTests
         var entity = new Category { Id = 1, CreatedAt = DateTime.UtcNow, Code = "KEEP", Name = "Old Name" };
         _repoMock.Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(entity);
+        _unitOfWorkMock.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
 
         var request = new UpdateCategoryRequest(null, "New Name");
         var result = await _service.UpdateAsync(1, request, CancellationToken.None);
@@ -148,6 +160,7 @@ public class CategoryServiceTests
 
         Assert.Null(result);
         _repoMock.Verify(r => r.UpdateAsync(It.IsAny<Category>(), It.IsAny<CancellationToken>()), Times.Never);
+        _unitOfWorkMock.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // ───── DeleteAsync ─────
@@ -157,10 +170,13 @@ public class CategoryServiceTests
     {
         _repoMock.Setup(r => r.DeleteAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
+        _unitOfWorkMock.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
 
         var result = await _service.DeleteAsync(1, CancellationToken.None);
 
         Assert.True(result);
+        _unitOfWorkMock.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -172,5 +188,6 @@ public class CategoryServiceTests
         var result = await _service.DeleteAsync(99, CancellationToken.None);
 
         Assert.False(result);
+        _unitOfWorkMock.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 }

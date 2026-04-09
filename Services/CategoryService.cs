@@ -1,10 +1,11 @@
+using dot_net_core_rest_api.Data;
 using dot_net_core_rest_api.Dtos;
 using dot_net_core_rest_api.Entities;
 using dot_net_core_rest_api.Repositories;
 
 namespace dot_net_core_rest_api.Services;
 
-public class CategoryService(ICategoryRepository repository, ILogger<CategoryService> logger) : ICategoryService
+public class CategoryService(ICategoryRepository repository, IUnitOfWork unitOfWork, ILogger<CategoryService> logger) : ICategoryService
 {
     public async Task<List<CategoryDto>> GetAllAsync(CancellationToken ct)
     {
@@ -28,6 +29,7 @@ public class CategoryService(ICategoryRepository repository, ILogger<CategorySer
         };
 
         await repository.CreateAsync(category, ct);
+        await unitOfWork.SaveChangesAsync(ct);
 
         logger.LogInformation("Category created: {CategoryId} {CategoryCode}", category.Id, category.Code);
 
@@ -47,6 +49,7 @@ public class CategoryService(ICategoryRepository repository, ILogger<CategorySer
             category.Name = request.Name;
 
         await repository.UpdateAsync(category, ct);
+        await unitOfWork.SaveChangesAsync(ct);
 
         logger.LogInformation("Category updated: {CategoryId}", category.Id);
 
@@ -58,7 +61,10 @@ public class CategoryService(ICategoryRepository repository, ILogger<CategorySer
         var deleted = await repository.DeleteAsync(id, ct);
 
         if (deleted)
+        {
+            await unitOfWork.SaveChangesAsync(ct);
             logger.LogInformation("Category deleted: {CategoryId}", id);
+        }
 
         return deleted;
     }

@@ -9,6 +9,7 @@ public class CategoryRepositoryTests : IDisposable
 {
     private readonly AppDbContext _db;
     private readonly CategoryRepository _repository;
+    private readonly IUnitOfWork _unitOfWork;
 
     public CategoryRepositoryTests()
     {
@@ -18,6 +19,7 @@ public class CategoryRepositoryTests : IDisposable
 
         _db = new AppDbContext(options);
         _repository = new CategoryRepository(_db);
+        _unitOfWork = new UnitOfWork(_db);
     }
 
     public void Dispose()
@@ -85,6 +87,7 @@ public class CategoryRepositoryTests : IDisposable
         var category = new Category { Code = "NEW", Name = "New Category", CreatedAt = DateTime.UtcNow };
 
         var result = await _repository.CreateAsync(category, CancellationToken.None);
+        await _unitOfWork.SaveChangesAsync();
 
         Assert.True(result.Id > 0);
         Assert.Equal("NEW", result.Code);
@@ -103,6 +106,7 @@ public class CategoryRepositoryTests : IDisposable
 
         var updated = new Category { Id = 1, Code = "UPD", Name = "Updated", CreatedAt = DateTime.UtcNow };
         await _repository.UpdateAsync(updated, CancellationToken.None);
+        await _unitOfWork.SaveChangesAsync();
 
         var fromDb = await _db.Categories.FindAsync(1);
         Assert.Equal("UPD", fromDb!.Code);
@@ -117,6 +121,7 @@ public class CategoryRepositoryTests : IDisposable
         await SeedAsync(new Category { Id = 1, Code = "DEL", Name = "Delete Me", CreatedAt = DateTime.UtcNow });
 
         var result = await _repository.DeleteAsync(1, CancellationToken.None);
+        await _unitOfWork.SaveChangesAsync();
 
         Assert.True(result);
         Assert.Empty(_db.Categories);

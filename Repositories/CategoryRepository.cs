@@ -21,17 +21,16 @@ public class CategoryRepository(AppDbContext db) : ICategoryRepository
             .FirstOrDefaultAsync(c => c.Id == id, ct);
     }
 
-    public async Task<Category> CreateAsync(Category category, CancellationToken ct)
+    public Task<Category> CreateAsync(Category category, CancellationToken ct)
     {
         db.Categories.Add(category);
-        await db.SaveChangesAsync(ct);
-        return category;
+        return Task.FromResult(category);
     }
 
-    public async Task UpdateAsync(Category category, CancellationToken ct)
+    public Task UpdateAsync(Category category, CancellationToken ct)
     {
         db.Categories.Update(category);
-        await db.SaveChangesAsync(ct);
+        return Task.CompletedTask;
     }
 
     public async Task<bool> DeleteAsync(int id, CancellationToken ct)
@@ -41,7 +40,6 @@ public class CategoryRepository(AppDbContext db) : ICategoryRepository
             return false;
 
         db.Categories.Remove(category);
-        await db.SaveChangesAsync(ct);
         return true;
     }
 }
