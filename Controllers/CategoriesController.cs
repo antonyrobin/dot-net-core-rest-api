@@ -1,17 +1,20 @@
 using dot_net_core_rest_api.Dtos;
 using dot_net_core_rest_api.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace dot_net_core_rest_api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class CategoriesController(ICategoryService categoryService) : ControllerBase
 {
     /// <summary>
     /// Get all categories.
     /// </summary>
     [HttpGet]
+    [AllowAnonymous]
     [ProducesResponseType<List<CategoryDto>>(StatusCodes.Status200OK)]
     public async Task<IActionResult> GetAll(CancellationToken ct)
     {
@@ -23,6 +26,7 @@ public class CategoriesController(ICategoryService categoryService) : Controller
     /// Get a category by id.
     /// </summary>
     [HttpGet("{id:int}")]
+    [AllowAnonymous]
     [ProducesResponseType<CategoryDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetById(int id, CancellationToken ct)

@@ -1,17 +1,20 @@
 using dot_net_core_rest_api.Dtos;
 using dot_net_core_rest_api.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace dot_net_core_rest_api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class SubCategoriesController(ISubCategoryService subCategoryService) : ControllerBase
 {
     /// <summary>
     /// Get all sub-categories.
     /// </summary>
     [HttpGet]
+    [AllowAnonymous]
     [ProducesResponseType<List<SubCategoryDto>>(StatusCodes.Status200OK)]
     public async Task<IActionResult> GetAll(CancellationToken ct)
     {
@@ -23,6 +26,7 @@ public class SubCategoriesController(ISubCategoryService subCategoryService) : C
     /// Get all sub-categories for a given category.
     /// </summary>
     [HttpGet("by-category/{categoryId:int}")]
+    [AllowAnonymous]
     [ProducesResponseType<List<SubCategoryDto>>(StatusCodes.Status200OK)]
     public async Task<IActionResult> GetByCategoryId(int categoryId, CancellationToken ct)
     {
@@ -34,6 +38,7 @@ public class SubCategoriesController(ISubCategoryService subCategoryService) : C
     /// Get a sub-category by id.
     /// </summary>
     [HttpGet("{id:int}")]
+    [AllowAnonymous]
     [ProducesResponseType<SubCategoryDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetById(int id, CancellationToken ct)

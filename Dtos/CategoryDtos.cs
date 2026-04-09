@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace dot_net_core_rest_api.Dtos;
 
 public record CategoryDto(
@@ -8,11 +10,11 @@ public record CategoryDto(
 );
 
 public record CreateCategoryRequest(
-    string Code,
-    string Name
+    [Required, StringLength(50, MinimumLength = 1)] string Code,
+    [Required, StringLength(200, MinimumLength = 1)] string Name
 );
 
 public record UpdateCategoryRequest(
-    string? Code,
-    string? Name
+    [StringLength(50)] string? Code,
+    [StringLength(200)] string? Name
 );
