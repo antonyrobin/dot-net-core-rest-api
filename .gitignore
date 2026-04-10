@@ -74,3 +74,6 @@ ScaffoldingReadMe.txt
 # Test coverage reports
 **/coverage/
 **/TestResults/
+
+# Environment variables (secrets)
+.env

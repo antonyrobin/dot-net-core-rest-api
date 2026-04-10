@@ -36,6 +36,7 @@ A clean-architecture REST API built with **ASP.NET Core (.NET 10)**, featuring t
 - [26. API Standards](#26-api-standards)
 - [27. Performance Optimizations](#27-performance-optimizations)
 - [28. Structured Logging (Serilog)](#28-structured-logging-serilog)
+- [29. Redis Caching (Distributed Cache)](#29-redis-caching-distributed-cache)
 
 ---
 
@@ -1225,6 +1226,7 @@ docker compose up -d
 | **Fluent API Configuration** | `CategoryConfiguration` (EF Core `IEntityTypeConfiguration<T>`) | Maps C# PascalCase to PostgreSQL snake_case; defines constraints and indexes |
 | **Factory Pattern** | `IntegrationTestFactory` (`WebApplicationFactory<Program>`) | Spins up the full app + database for integration testing |
 | **Primary Constructor** | All services, repositories, and controllers | Reduces boilerplate; cleaner constructor injection syntax (C# 12+) |
+| **Cache-Aside Pattern** | `CategoryService`, `SubCategoryService` via `IDistributedCache` | Read-through caching with Redis; automatic invalidation on writes |
 
 ---
 
@@ -1590,6 +1592,135 @@ docker run -v ./logs:/app/Logs your-image
 ```
 
 Alternatively, rely on console output and use a log aggregation tool (ELK, Seq, Datadog).
+
+---
+
+## 29. Redis Caching (Distributed Cache)
+
+### 29.1 Overview
+
+The API uses a **cache-aside (lazy-load)** pattern at the service layer with **Redis** as the distributed cache via `IDistributedCache`. This reduces database load for repeated reads while keeping write operations authoritative.
+
+| Feature | Detail |
+|---------|--------|
+| Library | Microsoft.Extensions.Caching.StackExchangeRedis 10.0.5 (StackExchange.Redis 2.7.27) |
+| Provider | **Upstash** (serverless Redis) or any Redis-compatible server |
+| Interface | `IDistributedCache` — testable via Moq, swappable to any distributed cache |
+| Pattern | Cache-aside: check cache → on miss, query DB → write to cache |
+| Serialization | `System.Text.Json` |
+| Invalidation | Explicit removal on Create / Update / Delete + TTL expiry |
+| TTL (GetAll) | 60 seconds (configurable) |
+| TTL (GetById) | 120 seconds (configurable) |
+
+### 29.2 Cache Key Strategy
+
+| Operation | Key Format | Example |
+|-----------|-----------|---------|
+| GetAll (Categories) | `categories:all:{Page}:{Limit}:{Cursor}:{Sort}:{Name}:{Code}` | `categories:all:1:10:::name_asc::` |
+| GetById (Categories) | `categories:{id}` | `categories:42` |
+| GetAll (SubCategories) | `subcategories:all:{Page}:{Limit}:{Cursor}:{Sort}:{Name}:{Code}:{CategoryId}` | `subcategories:all:1:10:::name_asc:::5` |
+| GetById (SubCategories) | `subcategories:{id}` | `subcategories:7` |
+
+Keys are prefixed with the `InstanceName` (default: `dotnetapi:`) configured at the Redis client level.
+
+### 29.3 Configuration (`appsettings.json`)
+
+```json
+{
+  "Redis": {
+    "Configuration": "localhost:6379",
+    "InstanceName": "dotnetapi:",
+    "CacheTtlSeconds": {
+      "GetAll": 60,
+      "GetById": 120
+    }
+  }
+}
+```
+
+The `REDIS_URL` environment variable takes precedence over `Redis:Configuration`:
+
+```bash
+# Upstash example
+export REDIS_URL="rediss://default:your-password@your-endpoint.upstash.io:6379"
+```
+
+### 29.4 Program.cs Registration
+
+```csharp
+var redisConfig = Environment.GetEnvironmentVariable("REDIS_URL")
+    ?? builder.Configuration["Redis:Configuration"]
+    ?? "localhost:6379";
+
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = redisConfig;
+    options.InstanceName = builder.Configuration["Redis:InstanceName"] ?? "dotnetapi:";
+});
+```
+
+### 29.5 Service Layer — Cache-Aside Pattern
+
+```
+GET /api/categories
+  ┌─────────────────┐
+  │ Check Redis      │ → HIT  → Return cached JSON (deserialized)
+  │ cache.GetAsync() │ → MISS → Query PostgreSQL → Serialize → cache.SetAsync() → Return
+  └─────────────────┘
+
+POST/PUT/DELETE /api/categories
+  ┌─────────────────────────┐
+  │ Execute DB operation     │
+  │ Invalidate entity cache  │ → cache.RemoveAsync("categories:{id}")
+  │ Invalidate list cache    │ → cache.RemoveAsync("categories:all:")
+  └─────────────────────────┘
+```
+
+### 29.6 Invalidation Strategy
+
+| Write Operation | Invalidation |
+|-----------------|-------------|
+| **Create** | Remove all list caches (lists are stale after insert) |
+| **Update** | Remove entity cache + all list caches |
+| **Delete** | Remove entity cache + all list caches (only if delete succeeded) |
+
+`IDistributedCache` does not support pattern-based key deletion. List caches also expire naturally via TTL.
+
+### 29.7 Upstash Setup
+
+1. Create a free Redis database at [console.upstash.com](https://console.upstash.com)
+2. Copy the **Redis URL** (TLS-enabled `rediss://` endpoint)
+3. Set the environment variable:
+   ```bash
+   export REDIS_URL="rediss://default:your-password@your-endpoint.upstash.io:6379"
+   ```
+4. The API connects automatically on startup
+
+### 29.8 Docker / Local Development
+
+For local development without Upstash, run Redis in Docker:
+
+```bash
+docker run -d --name redis -p 6379:6379 redis:7-alpine
+```
+
+The default `Redis:Configuration` in `appsettings.json` points to `localhost:6379`.
+
+### 29.9 Testing
+
+Both `CategoryServiceTests` and `SubCategoryServiceTests` use `Mock<IDistributedCache>` with:
+
+- **Default setup**: `GetAsync` returns `null` (cache miss) — all CRUD tests run against the mocked repository
+- **Cache hit tests**: `GetAsync` returns serialized JSON bytes — verifies the repository is **never** called
+- **In-memory configuration**: `ConfigurationBuilder.AddInMemoryCollection` provides TTL values
+
+```csharp
+_cacheMock.Setup(c => c.GetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+    .ReturnsAsync((byte[]?)null); // Default: cache miss
+
+_service = new CategoryService(
+    _repoMock.Object, _cacheMock.Object, config, _loggerMock.Object);
+```
 
 ---
 
