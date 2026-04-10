@@ -1,5 +1,6 @@
 using dot_net_core_rest_api.Dtos;
 using dot_net_core_rest_api.Entities;
+using dot_net_core_rest_api.Models;
 using dot_net_core_rest_api.Repositories;
 using dot_net_core_rest_api.Services;
 using Microsoft.Extensions.Logging;
@@ -28,25 +29,25 @@ public class CategoryServiceTests
             new() { Id = 1, CreatedAt = DateTime.UtcNow, Code = "CAT1", Name = "Alpha" },
             new() { Id = 2, CreatedAt = DateTime.UtcNow, Code = "CAT2", Name = "Beta" }
         };
-        _repoMock.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(entities);
+        _repoMock.Setup(r => r.GetAllAsync(It.IsAny<CategoryQueryParameters>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<Category> { Items = entities, Total = 2, HasMore = false });
 
-        var result = await _service.GetAllAsync(CancellationToken.None);
+        var result = await _service.GetAllAsync(new CategoryQueryParameters(), CancellationToken.None);
 
-        Assert.Equal(2, result.Count);
-        Assert.Equal("CAT1", result[0].Code);
-        Assert.Equal("Beta", result[1].Name);
+        Assert.Equal(2, result.Items.Count);
+        Assert.Equal("CAT1", result.Items[0].Code);
+        Assert.Equal("Beta", result.Items[1].Name);
     }
 
     [Fact]
     public async Task GetAllAsync_EmptyList_ReturnsEmptyList()
     {
-        _repoMock.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync([]);
+        _repoMock.Setup(r => r.GetAllAsync(It.IsAny<CategoryQueryParameters>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<Category> { Items = [], Total = 0, HasMore = false });
 
-        var result = await _service.GetAllAsync(CancellationToken.None);
+        var result = await _service.GetAllAsync(new CategoryQueryParameters(), CancellationToken.None);
 
-        Assert.Empty(result);
+        Assert.Empty(result.Items);
     }
 
     // ───── GetByIdAsync ─────

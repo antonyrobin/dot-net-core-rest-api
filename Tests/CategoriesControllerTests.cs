@@ -1,7 +1,10 @@
 using dot_net_core_rest_api.Controllers;
 using dot_net_core_rest_api.Dtos;
+using dot_net_core_rest_api.Models;
 using dot_net_core_rest_api.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Moq;
 
 namespace dot_net_core_rest_api.Tests;
@@ -9,11 +12,16 @@ namespace dot_net_core_rest_api.Tests;
 public class CategoriesControllerTests
 {
     private readonly Mock<ICategoryService> _serviceMock = new();
+    private readonly Mock<ILogger<CategoriesController>> _loggerMock = new();
     private readonly CategoriesController _controller;
 
     public CategoriesControllerTests()
     {
-        _controller = new CategoriesController(_serviceMock.Object);
+        _controller = new CategoriesController(_serviceMock.Object, _loggerMock.Object);
+        _controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext()
+        };
     }
 
     // ───── GetAll ─────
@@ -26,25 +34,53 @@ public class CategoriesControllerTests
             new(1, DateTime.UtcNow, "CAT1", "Category 1"),
             new(2, DateTime.UtcNow, "CAT2", "Category 2")
         };
-        _serviceMock.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(categories);
+        _serviceMock.Setup(s => s.GetAllAsync(It.IsAny<CategoryQueryParameters>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<CategoryDto> { Items = categories, Total = 2, HasMore = false });
 
-        var result = await _controller.GetAll(CancellationToken.None);
+        var result = await _controller.GetAll(new CategoryQueryParameters(), CancellationToken.None);
 
         var okResult = Assert.IsType<OkObjectResult>(result);
-        Assert.Equal(categories, okResult.Value);
+        var response = Assert.IsType<ApiSuccessResponse<List<CategoryDto>>>(okResult.Value);
+        Assert.True(response.Success);
+        Assert.Equal(2, response.Data!.Count);
+        Assert.NotNull(response.Meta);
     }
 
     [Fact]
     public async Task GetAll_ReturnsOkWithEmptyList()
     {
-        _serviceMock.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync([]);
+        _serviceMock.Setup(s => s.GetAllAsync(It.IsAny<CategoryQueryParameters>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<CategoryDto> { Items = [], Total = 0, HasMore = false });
 
-        var result = await _controller.GetAll(CancellationToken.None);
+        var result = await _controller.GetAll(new CategoryQueryParameters(), CancellationToken.None);
 
         var okResult = Assert.IsType<OkObjectResult>(result);
-        Assert.Empty((List<CategoryDto>)okResult.Value!);
+        var response = Assert.IsType<ApiSuccessResponse<List<CategoryDto>>>(okResult.Value);
+        Assert.Empty(response.Data!);
+    }
+
+    [Fact]
+    public async Task GetAll_SetsMetaCorrectly()
+    {
+        _serviceMock.Setup(s => s.GetAllAsync(It.IsAny<CategoryQueryParameters>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<CategoryDto>
+            {
+                Items = [new(1, DateTime.UtcNow, "A", "Alpha")],
+                Total = 50,
+                Cursor = "abc",
+                HasMore = true
+            });
+
+        var query = new CategoryQueryParameters { Page = 3, Limit = 10 };
+        var result = await _controller.GetAll(query, CancellationToken.None);
+
+        var okResult = Assert.IsType<OkObjectResult>(result);
+        var response = Assert.IsType<ApiSuccessResponse<List<CategoryDto>>>(okResult.Value);
+        Assert.Equal(3, response.Meta!.Page);
+        Assert.Equal(10, response.Meta.Limit);
+        Assert.Equal(50, response.Meta.Total);
+        Assert.Equal("abc", response.Meta.Cursor);
+        Assert.True(response.Meta.HasMore);
     }
 
     // ───── GetById ─────
@@ -59,7 +95,8 @@ public class CategoriesControllerTests
         var result = await _controller.GetById(1, CancellationToken.None);
 
         var okResult = Assert.IsType<OkObjectResult>(result);
-        Assert.Equal(dto, okResult.Value);
+        var response = Assert.IsType<ApiSuccessResponse<CategoryDto>>(okResult.Value);
+        Assert.Equal(dto, response.Data);
     }
 
     [Fact]
@@ -70,7 +107,7 @@ public class CategoriesControllerTests
 
         var result = await _controller.GetById(99, CancellationToken.None);
 
-        Assert.IsType<NotFoundResult>(result);
+        Assert.IsType<NotFoundObjectResult>(result);
     }
 
     // ───── Create ─────
@@ -88,7 +125,8 @@ public class CategoriesControllerTests
         var createdResult = Assert.IsType<CreatedAtActionResult>(result);
         Assert.Equal(nameof(CategoriesController.GetById), createdResult.ActionName);
         Assert.Equal(1, createdResult.RouteValues!["id"]);
-        Assert.Equal(dto, createdResult.Value);
+        var response = Assert.IsType<ApiSuccessResponse<CategoryDto>>(createdResult.Value);
+        Assert.Equal(dto, response.Data);
     }
 
     // ───── Update ─────
@@ -104,7 +142,8 @@ public class CategoriesControllerTests
         var result = await _controller.Update(1, request, CancellationToken.None);
 
         var okResult = Assert.IsType<OkObjectResult>(result);
-        Assert.Equal(dto, okResult.Value);
+        var response = Assert.IsType<ApiSuccessResponse<CategoryDto>>(okResult.Value);
+        Assert.Equal(dto, response.Data);
     }
 
     [Fact]
@@ -116,7 +155,7 @@ public class CategoriesControllerTests
 
         var result = await _controller.Update(99, request, CancellationToken.None);
 
-        Assert.IsType<NotFoundResult>(result);
+        Assert.IsType<NotFoundObjectResult>(result);
     }
 
     // ───── Delete ─────
@@ -140,6 +179,6 @@ public class CategoriesControllerTests
 
         var result = await _controller.Delete(99, CancellationToken.None);
 
-        Assert.IsType<NotFoundResult>(result);
+        Assert.IsType<NotFoundObjectResult>(result);
     }
 }

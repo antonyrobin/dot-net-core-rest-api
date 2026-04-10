@@ -1,5 +1,8 @@
 using dot_net_core_rest_api.Entities;
+using dot_net_core_rest_api.Models;
 using dot_net_core_rest_api.Repositories;
+using Microsoft.Extensions.Logging;
+using Moq;
 using Npgsql;
 using Testcontainers.PostgreSql;
 
@@ -53,7 +56,7 @@ public class SubCategoryRepositoryTests : IClassFixture<PostgreSqlFixture>, IAsy
     public SubCategoryRepositoryTests(PostgreSqlFixture fixture)
     {
         _fixture = fixture;
-        _repository = new SubCategoryRepository(fixture.DataSource);
+        _repository = new SubCategoryRepository(fixture.DataSource, new Mock<ILogger<SubCategoryRepository>>().Object);
     }
 
     public async Task InitializeAsync()
@@ -92,25 +95,25 @@ public class SubCategoryRepositoryTests : IClassFixture<PostgreSqlFixture>, IAsy
             new SubCategory { Code = "A", Name = "Alpha", CategoryId = 1, CreatedAt = DateTime.UtcNow }
         );
 
-        var result = await _repository.GetAllAsync(CancellationToken.None);
+        var result = await _repository.GetAllAsync(new SubCategoryQueryParameters(), CancellationToken.None);
 
-        Assert.Equal(2, result.Count);
-        Assert.Equal("Alpha", result[0].Name);
-        Assert.Equal("Bravo", result[1].Name);
+        Assert.Equal(2, result.Items.Count);
+        Assert.Equal("Alpha", result.Items[0].Name);
+        Assert.Equal("Bravo", result.Items[1].Name);
     }
 
     [Fact]
     public async Task GetAllAsync_EmptyTable_ReturnsEmptyList()
     {
-        var result = await _repository.GetAllAsync(CancellationToken.None);
+        var result = await _repository.GetAllAsync(new SubCategoryQueryParameters(), CancellationToken.None);
 
-        Assert.Empty(result);
+        Assert.Empty(result.Items);
     }
 
-    // ───── GetByCategoryIdAsync ─────
+    // ───── GetAllAsync with CategoryId filter ─────
 
     [Fact]
-    public async Task GetByCategoryIdAsync_ReturnsMatchingRows()
+    public async Task GetAllAsync_WithCategoryId_ReturnsMatchingRows()
     {
         await SeedAsync(
             new SubCategory { Code = "S1", Name = "Sub1", CategoryId = 1, CreatedAt = DateTime.UtcNow },
@@ -118,22 +121,22 @@ public class SubCategoryRepositoryTests : IClassFixture<PostgreSqlFixture>, IAsy
             new SubCategory { Code = "S3", Name = "Sub3", CategoryId = 1, CreatedAt = DateTime.UtcNow }
         );
 
-        var result = await _repository.GetByCategoryIdAsync(1, CancellationToken.None);
+        var result = await _repository.GetAllAsync(new SubCategoryQueryParameters { CategoryId = 1 }, CancellationToken.None);
 
-        Assert.Equal(2, result.Count);
-        Assert.All(result, r => Assert.Equal(1, r.CategoryId));
+        Assert.Equal(2, result.Items.Count);
+        Assert.All(result.Items, r => Assert.Equal(1, r.CategoryId));
     }
 
     [Fact]
-    public async Task GetByCategoryIdAsync_NoMatch_ReturnsEmptyList()
+    public async Task GetAllAsync_WithCategoryId_NoMatch_ReturnsEmptyList()
     {
         await SeedAsync(
             new SubCategory { Code = "S1", Name = "Sub1", CategoryId = 1, CreatedAt = DateTime.UtcNow }
         );
 
-        var result = await _repository.GetByCategoryIdAsync(999, CancellationToken.None);
+        var result = await _repository.GetAllAsync(new SubCategoryQueryParameters { CategoryId = 999 }, CancellationToken.None);
 
-        Assert.Empty(result);
+        Assert.Empty(result.Items);
     }
 
     // ───── GetByIdAsync ─────
@@ -145,8 +148,8 @@ public class SubCategoryRepositoryTests : IClassFixture<PostgreSqlFixture>, IAsy
             new SubCategory { Code = "SC1", Name = "Test", CategoryId = 1, CreatedAt = DateTime.UtcNow }
         );
 
-        var all = await _repository.GetAllAsync(CancellationToken.None);
-        var result = await _repository.GetByIdAsync(all[0].Id, CancellationToken.None);
+        var all = await _repository.GetAllAsync(new SubCategoryQueryParameters(), CancellationToken.None);
+        var result = await _repository.GetByIdAsync(all.Items[0].Id, CancellationToken.None);
 
         Assert.NotNull(result);
         Assert.Equal("SC1", result!.Code);
@@ -197,8 +200,8 @@ public class SubCategoryRepositoryTests : IClassFixture<PostgreSqlFixture>, IAsy
             new SubCategory { Code = "OLD", Name = "Old Name", CategoryId = 1, CreatedAt = DateTime.UtcNow }
         );
 
-        var all = await _repository.GetAllAsync(CancellationToken.None);
-        var existing = all[0];
+        var all = await _repository.GetAllAsync(new SubCategoryQueryParameters(), CancellationToken.None);
+        var existing = all.Items[0];
 
         var updated = new SubCategory
         {
@@ -227,8 +230,8 @@ public class SubCategoryRepositoryTests : IClassFixture<PostgreSqlFixture>, IAsy
             new SubCategory { Code = "DEL", Name = "Delete Me", CategoryId = 1, CreatedAt = DateTime.UtcNow }
         );
 
-        var all = await _repository.GetAllAsync(CancellationToken.None);
-        var id = all[0].Id;
+        var all = await _repository.GetAllAsync(new SubCategoryQueryParameters(), CancellationToken.None);
+        var id = all.Items[0].Id;
 
         var result = await _repository.DeleteAsync(id, CancellationToken.None);
 
@@ -242,5 +245,111 @@ public class SubCategoryRepositoryTests : IClassFixture<PostgreSqlFixture>, IAsy
         var result = await _repository.DeleteAsync(9999, CancellationToken.None);
 
         Assert.False(result);
+    }
+
+    // ───── GetAllAsync with Name filter ─────
+
+    [Fact]
+    public async Task GetAllAsync_WithNameFilter_ReturnsMatchingRows()
+    {
+        await SeedAsync(
+            new SubCategory { Code = "S1", Name = "Alpha Sub", CategoryId = 1, CreatedAt = DateTime.UtcNow },
+            new SubCategory { Code = "S2", Name = "Bravo Sub", CategoryId = 1, CreatedAt = DateTime.UtcNow }
+        );
+
+        var result = await _repository.GetAllAsync(new SubCategoryQueryParameters { Name = "Alpha" }, CancellationToken.None);
+
+        Assert.Single(result.Items);
+        Assert.Equal("Alpha Sub", result.Items[0].Name);
+    }
+
+    // ───── GetAllAsync with Code filter ─────
+
+    [Fact]
+    public async Task GetAllAsync_WithCodeFilter_ReturnsMatchingRows()
+    {
+        await SeedAsync(
+            new SubCategory { Code = "XYZ", Name = "Sub1", CategoryId = 1, CreatedAt = DateTime.UtcNow },
+            new SubCategory { Code = "ABC", Name = "Sub2", CategoryId = 1, CreatedAt = DateTime.UtcNow }
+        );
+
+        var result = await _repository.GetAllAsync(new SubCategoryQueryParameters { Code = "XYZ" }, CancellationToken.None);
+
+        Assert.Single(result.Items);
+        Assert.Equal("XYZ", result.Items[0].Code);
+    }
+
+    // ───── GetAllAsync with combined filters ─────
+
+    [Fact]
+    public async Task GetAllAsync_WithAllFilters_ReturnsMatchingRows()
+    {
+        await SeedAsync(
+            new SubCategory { Code = "F1", Name = "Filter1", CategoryId = 1, CreatedAt = DateTime.UtcNow },
+            new SubCategory { Code = "F2", Name = "Filter2", CategoryId = 2, CreatedAt = DateTime.UtcNow },
+            new SubCategory { Code = "X1", Name = "Other", CategoryId = 1, CreatedAt = DateTime.UtcNow }
+        );
+
+        var result = await _repository.GetAllAsync(
+            new SubCategoryQueryParameters { Name = "Filter", Code = "F1", CategoryId = 1 },
+            CancellationToken.None);
+
+        Assert.Single(result.Items);
+        Assert.Equal("F1", result.Items[0].Code);
+    }
+
+    // ───── GetAllAsync with cursor pagination ─────
+
+    [Fact]
+    public async Task GetAllAsync_WithCursor_ReturnsPaginatedResults()
+    {
+        await SeedAsync(
+            new SubCategory { Code = "C1", Name = "Sub1", CategoryId = 1, CreatedAt = DateTime.UtcNow },
+            new SubCategory { Code = "C2", Name = "Sub2", CategoryId = 1, CreatedAt = DateTime.UtcNow },
+            new SubCategory { Code = "C3", Name = "Sub3", CategoryId = 1, CreatedAt = DateTime.UtcNow }
+        );
+
+        // First page
+        var first = await _repository.GetAllAsync(new SubCategoryQueryParameters { Limit = 2 }, CancellationToken.None);
+        Assert.Equal(2, first.Items.Count);
+        Assert.True(first.HasMore);
+        Assert.NotNull(first.Cursor);
+
+        // Second page using cursor
+        var second = await _repository.GetAllAsync(new SubCategoryQueryParameters { Cursor = first.Cursor, Limit = 2 }, CancellationToken.None);
+        Assert.Single(second.Items);
+        Assert.False(second.HasMore);
+    }
+
+    // ───── GetAllAsync with sorting ─────
+
+    [Fact]
+    public async Task GetAllAsync_WithSort_ReturnsSortedResults()
+    {
+        await SeedAsync(
+            new SubCategory { Code = "B", Name = "Bravo", CategoryId = 1, CreatedAt = DateTime.UtcNow },
+            new SubCategory { Code = "A", Name = "Alpha", CategoryId = 1, CreatedAt = DateTime.UtcNow }
+        );
+
+        var result = await _repository.GetAllAsync(new SubCategoryQueryParameters { Sort = "code:asc" }, CancellationToken.None);
+
+        Assert.Equal("A", result.Items[0].Code);
+        Assert.Equal("B", result.Items[1].Code);
+    }
+
+    // ───── GetAllAsync with offset pagination ─────
+
+    [Fact]
+    public async Task GetAllAsync_WithOffsetPagination_ReturnsCorrectPage()
+    {
+        await SeedAsync(
+            new SubCategory { Code = "P1", Name = "Page1", CategoryId = 1, CreatedAt = DateTime.UtcNow },
+            new SubCategory { Code = "P2", Name = "Page2", CategoryId = 1, CreatedAt = DateTime.UtcNow },
+            new SubCategory { Code = "P3", Name = "Page3", CategoryId = 1, CreatedAt = DateTime.UtcNow }
+        );
+
+        var result = await _repository.GetAllAsync(new SubCategoryQueryParameters { Page = 2, Limit = 2 }, CancellationToken.None);
+
+        Assert.Single(result.Items);
     }
 }

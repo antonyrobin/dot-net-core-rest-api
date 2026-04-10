@@ -1,30 +1,46 @@
+using System.IO.Compression;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
+using dot_net_core_rest_api.Constants;
 using dot_net_core_rest_api.Data;
+using dot_net_core_rest_api.Middleware;
+using dot_net_core_rest_api.Models;
 using dot_net_core_rest_api.Repositories;
 using dot_net_core_rest_api.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ---------- Database ----------
+// ---------- Serilog (async file + console logging) ----------
+builder.Host.UseSerilog((context, services, configuration) =>
+    configuration.ReadFrom.Configuration(context.Configuration));
+
+// ---------- Database (shared NpgsqlDataSource) ----------
 var connectionString = Environment.GetEnvironmentVariable("POSTGRES_DB_URL")
     ?? builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException("Database connection string not configured. Set the DATABASE_URL environment variable.");
 
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(connectionString));
+var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+var dataSource = dataSourceBuilder.Build();
 
-// ---------- NpgsqlDataSource (raw SQL) ----------
-builder.Services.AddSingleton(NpgsqlDataSource.Create(connectionString));
+builder.Services.AddSingleton(dataSource);
+
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseNpgsql(dataSource));
 
 // ---------- Services (DI) ----------
 builder.Services.AddScoped<ICategoryRepository, CategoryRepository>();
 builder.Services.AddScoped<ICategoryService, CategoryService>();
 builder.Services.AddScoped<ISubCategoryRepository, SubCategoryRepository>();
 builder.Services.AddScoped<ISubCategoryService, SubCategoryService>();
+builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
 // ---------- JWT Authentication ----------
 var jwtKey = builder.Configuration["Jwt:Key"]
@@ -65,24 +81,138 @@ builder.Services.AddCors(options =>
     });
 });
 
-// ---------- Rate Limiting ----------
+// ---------- Rate Limiting (Token Bucket) ----------
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddPolicy("fixed", httpContext =>
-        RateLimitPartition.GetFixedWindowLimiter(
+
+    // Standard tier: 100 requests/minute
+    options.AddPolicy("standard", httpContext =>
+        RateLimitPartition.GetTokenBucketLimiter(
             partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            factory: _ => new FixedWindowRateLimiterOptions
+            factory: _ => new TokenBucketRateLimiterOptions
             {
-                PermitLimit = 100,
-                Window = TimeSpan.FromMinutes(1),
-                QueueLimit = 0
+                TokenLimit = 100,
+                ReplenishmentPeriod = TimeSpan.FromMinutes(1),
+                TokensPerPeriod = 100,
+                QueueLimit = 0,
+                AutoReplenishment = true
             }));
+
+    // Premium tier: 1000 requests/minute
+    options.AddPolicy("premium", httpContext =>
+        RateLimitPartition.GetTokenBucketLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new TokenBucketRateLimiterOptions
+            {
+                TokenLimit = 1000,
+                ReplenishmentPeriod = TimeSpan.FromMinutes(1),
+                TokensPerPeriod = 1000,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    // RFC 7807 error response for rate limit exceeded
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        context.HttpContext.Response.ContentType = "application/json";
+
+        var response = new ApiErrorResponse
+        {
+            Error = new ApiError
+            {
+                Type = ErrorTypes.TooManyRequests,
+                Title = "Too Many Requests",
+                Status = 429,
+                Detail = "Rate limit exceeded. Please try again later.",
+                Instance = context.HttpContext.Request.Path
+            },
+            Timestamp = DateTime.UtcNow.ToString("o"),
+            RequestId = context.HttpContext.TraceIdentifier
+        };
+
+        await context.HttpContext.Response.WriteAsJsonAsync(response, cancellationToken: cancellationToken);
+    };
 });
 
-// ---------- Controllers & OpenAPI ----------
-builder.Services.AddControllers();
+// ---------- Controllers & JSON ----------
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+        options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+    });
+
+// ---------- Validation error response (RFC 7807) ----------
+builder.Services.Configure<ApiBehaviorOptions>(options =>
+{
+    options.InvalidModelStateResponseFactory = context =>
+    {
+        var errors = context.ModelState
+            .Where(e => e.Value?.Errors.Count > 0)
+            .SelectMany(e => e.Value!.Errors.Select(err => new FieldError
+            {
+                Field = e.Key,
+                Message = err.ErrorMessage,
+                Code = "VALIDATION_ERROR"
+            }))
+            .ToList();
+
+        var response = new ApiErrorResponse
+        {
+            Error = new ApiError
+            {
+                Type = ErrorTypes.Validation,
+                Title = "Validation Error",
+                Status = 422,
+                Detail = "The request body contains invalid fields",
+                Instance = context.HttpContext.Request.Path,
+                Errors = errors
+            },
+            Timestamp = DateTime.UtcNow.ToString("o"),
+            RequestId = context.HttpContext.TraceIdentifier
+        };
+
+        return new UnprocessableEntityObjectResult(response);
+    };
+});
+
+// ---------- OpenAPI ----------
 builder.Services.AddOpenApi();
+
+// ---------- Response Compression ----------
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<BrotliCompressionProvider>();
+    options.Providers.Add<GzipCompressionProvider>();
+});
+builder.Services.Configure<BrotliCompressionProviderOptions>(options =>
+    options.Level = CompressionLevel.Fastest);
+builder.Services.Configure<GzipCompressionProviderOptions>(options =>
+    options.Level = CompressionLevel.Fastest);
+
+// ---------- Health Checks ----------
+builder.Services.AddHealthChecks()
+    .AddNpgSql(connectionString);
+
+// ---------- Request Timeouts ----------
+builder.Services.AddRequestTimeouts(options =>
+{
+    options.DefaultPolicy = new Microsoft.AspNetCore.Http.Timeouts.RequestTimeoutPolicy
+    {
+        Timeout = TimeSpan.FromSeconds(30)
+    };
+});
+
+// ---------- Output Caching ----------
+builder.Services.AddOutputCache(options =>
+{
+    options.AddBasePolicy(policy => policy.NoCache());
+    options.AddPolicy("CachePublicGet", policy =>
+        policy.Expire(TimeSpan.FromSeconds(60)).Tag("public"));
+});
 
 // ---------- Suppress detailed errors in production ----------
 if (!builder.Environment.IsDevelopment())
@@ -93,13 +223,25 @@ if (!builder.Environment.IsDevelopment())
 var app = builder.Build();
 
 // ---------- Middleware Pipeline ----------
+
+// 1. Request ID (must be first to tag all logs)
+app.UseMiddleware<RequestIdMiddleware>();
+
+// 2. Global exception handler
+app.UseMiddleware<GlobalExceptionMiddleware>();
+
+// 3. Response compression (early to compress all downstream output)
+app.UseResponseCompression();
+
+// 4. Request logging
+app.UseMiddleware<RequestLoggingMiddleware>();
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 else
 {
-    app.UseExceptionHandler("/error");
     app.UseHsts();
 }
 
@@ -116,10 +258,13 @@ app.Use(async (context, next) =>
 app.UseHttpsRedirection();
 app.UseCors("AllowTrustedOrigins");
 app.UseRateLimiter();
+app.UseRequestTimeouts();
+app.UseOutputCache();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapControllers().RequireRateLimiting("fixed");
+app.MapControllers().RequireRateLimiting("standard");
+app.MapHealthChecks("/health").AllowAnonymous();
 
 app.Run();
 

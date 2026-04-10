@@ -1,5 +1,6 @@
 using dot_net_core_rest_api.Dtos;
 using dot_net_core_rest_api.Entities;
+using dot_net_core_rest_api.Models;
 using dot_net_core_rest_api.Repositories;
 using dot_net_core_rest_api.Services;
 using Microsoft.Extensions.Logging;
@@ -28,43 +29,43 @@ public class SubCategoryServiceTests
             new() { Id = 1, CreatedAt = DateTime.UtcNow, Code = "SUB1", Name = "Alpha", CategoryId = 10 },
             new() { Id = 2, CreatedAt = DateTime.UtcNow, Code = "SUB2", Name = "Beta", CategoryId = 10 }
         };
-        _repoMock.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(entities);
+        _repoMock.Setup(r => r.GetAllAsync(It.IsAny<SubCategoryQueryParameters>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<SubCategory> { Items = entities, Total = 2, HasMore = false });
 
-        var result = await _service.GetAllAsync(CancellationToken.None);
+        var result = await _service.GetAllAsync(new SubCategoryQueryParameters(), CancellationToken.None);
 
-        Assert.Equal(2, result.Count);
-        Assert.Equal("SUB1", result[0].Code);
-        Assert.Equal("Beta", result[1].Name);
+        Assert.Equal(2, result.Items.Count);
+        Assert.Equal("SUB1", result.Items[0].Code);
+        Assert.Equal("Beta", result.Items[1].Name);
     }
 
     [Fact]
     public async Task GetAllAsync_EmptyList_ReturnsEmptyList()
     {
-        _repoMock.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync([]);
+        _repoMock.Setup(r => r.GetAllAsync(It.IsAny<SubCategoryQueryParameters>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<SubCategory> { Items = [], Total = 0, HasMore = false });
 
-        var result = await _service.GetAllAsync(CancellationToken.None);
+        var result = await _service.GetAllAsync(new SubCategoryQueryParameters(), CancellationToken.None);
 
-        Assert.Empty(result);
+        Assert.Empty(result.Items);
     }
 
-    // ───── GetByCategoryIdAsync ─────
+    // ───── GetAllAsync with CategoryId filter ─────
 
     [Fact]
-    public async Task GetByCategoryIdAsync_ReturnsMappedDtos()
+    public async Task GetAllAsync_WithCategoryId_ReturnsMappedDtos()
     {
         var entities = new List<SubCategory>
         {
             new() { Id = 1, CreatedAt = DateTime.UtcNow, Code = "SUB1", Name = "Alpha", CategoryId = 5 }
         };
-        _repoMock.Setup(r => r.GetByCategoryIdAsync(5, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(entities);
+        _repoMock.Setup(r => r.GetAllAsync(It.IsAny<SubCategoryQueryParameters>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<SubCategory> { Items = entities, Total = 1, HasMore = false });
 
-        var result = await _service.GetByCategoryIdAsync(5, CancellationToken.None);
+        var result = await _service.GetAllAsync(new SubCategoryQueryParameters { CategoryId = 5 }, CancellationToken.None);
 
-        Assert.Single(result);
-        Assert.Equal(5, result[0].CategoryId);
+        Assert.Single(result.Items);
+        Assert.Equal(5, result.Items[0].CategoryId);
     }
 
     // ───── GetByIdAsync ─────

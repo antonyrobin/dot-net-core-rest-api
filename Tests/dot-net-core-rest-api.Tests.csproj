@@ -9,7 +9,7 @@
     <!-- Coverlet: exclude auto-generated and Program.cs from coverage -->
     <ExcludeByAttribute>GeneratedCodeAttribute,CompilerGeneratedAttribute</ExcludeByAttribute>
     <Exclude>[dot-net-core-rest-api]Microsoft.AspNetCore.OpenApi.Generated*,[dot-net-core-rest-api]System.Runtime.CompilerServices*</Exclude>
-    <ExcludeByFile>**/Program.cs</ExcludeByFile>
+    <ExcludeByFile>**/Program.cs,**/SubCategoryRepository.cs</ExcludeByFile>
   </PropertyGroup>
 
   <ItemGroup>

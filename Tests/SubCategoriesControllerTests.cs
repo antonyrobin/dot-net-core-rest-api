@@ -1,7 +1,10 @@
 using dot_net_core_rest_api.Controllers;
 using dot_net_core_rest_api.Dtos;
+using dot_net_core_rest_api.Models;
 using dot_net_core_rest_api.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Moq;
 
 namespace dot_net_core_rest_api.Tests;
@@ -9,11 +12,16 @@ namespace dot_net_core_rest_api.Tests;
 public class SubCategoriesControllerTests
 {
     private readonly Mock<ISubCategoryService> _serviceMock = new();
+    private readonly Mock<ILogger<SubCategoriesController>> _loggerMock = new();
     private readonly SubCategoriesController _controller;
 
     public SubCategoriesControllerTests()
     {
-        _controller = new SubCategoriesController(_serviceMock.Object);
+        _controller = new SubCategoriesController(_serviceMock.Object, _loggerMock.Object);
+        _controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext()
+        };
     }
 
     // ───── GetAll ─────
@@ -26,25 +34,28 @@ public class SubCategoriesControllerTests
             new(1, DateTime.UtcNow, "SUB1", "SubCategory 1", 10),
             new(2, DateTime.UtcNow, "SUB2", "SubCategory 2", 10)
         };
-        _serviceMock.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(subCategories);
+        _serviceMock.Setup(s => s.GetAllAsync(It.IsAny<SubCategoryQueryParameters>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<SubCategoryDto> { Items = subCategories, Total = 2, HasMore = false });
 
-        var result = await _controller.GetAll(CancellationToken.None);
+        var result = await _controller.GetAll(new SubCategoryQueryParameters(), CancellationToken.None);
 
         var okResult = Assert.IsType<OkObjectResult>(result);
-        Assert.Equal(subCategories, okResult.Value);
+        var response = Assert.IsType<ApiSuccessResponse<List<SubCategoryDto>>>(okResult.Value);
+        Assert.True(response.Success);
+        Assert.Equal(2, response.Data!.Count);
     }
 
     [Fact]
     public async Task GetAll_ReturnsOkWithEmptyList()
     {
-        _serviceMock.Setup(s => s.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync([]);
+        _serviceMock.Setup(s => s.GetAllAsync(It.IsAny<SubCategoryQueryParameters>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<SubCategoryDto> { Items = [], Total = 0, HasMore = false });
 
-        var result = await _controller.GetAll(CancellationToken.None);
+        var result = await _controller.GetAll(new SubCategoryQueryParameters(), CancellationToken.None);
 
         var okResult = Assert.IsType<OkObjectResult>(result);
-        Assert.Empty((List<SubCategoryDto>)okResult.Value!);
+        var response = Assert.IsType<ApiSuccessResponse<List<SubCategoryDto>>>(okResult.Value);
+        Assert.Empty(response.Data!);
     }
 
     // ───── GetByCategoryId ─────
@@ -56,13 +67,14 @@ public class SubCategoriesControllerTests
         {
             new(1, DateTime.UtcNow, "SUB1", "SubCategory 1", 5)
         };
-        _serviceMock.Setup(s => s.GetByCategoryIdAsync(5, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(subCategories);
+        _serviceMock.Setup(s => s.GetAllAsync(It.IsAny<SubCategoryQueryParameters>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<SubCategoryDto> { Items = subCategories, Total = 1, HasMore = false });
 
-        var result = await _controller.GetByCategoryId(5, CancellationToken.None);
+        var result = await _controller.GetByCategoryId(5, new SubCategoryQueryParameters(), CancellationToken.None);
 
         var okResult = Assert.IsType<OkObjectResult>(result);
-        Assert.Single((List<SubCategoryDto>)okResult.Value!);
+        var response = Assert.IsType<ApiSuccessResponse<List<SubCategoryDto>>>(okResult.Value);
+        Assert.Single(response.Data!);
     }
 
     // ───── GetById ─────
@@ -77,7 +89,8 @@ public class SubCategoriesControllerTests
         var result = await _controller.GetById(1, CancellationToken.None);
 
         var okResult = Assert.IsType<OkObjectResult>(result);
-        Assert.Equal(dto, okResult.Value);
+        var response = Assert.IsType<ApiSuccessResponse<SubCategoryDto>>(okResult.Value);
+        Assert.Equal(dto, response.Data);
     }
 
     [Fact]
@@ -88,7 +101,7 @@ public class SubCategoriesControllerTests
 
         var result = await _controller.GetById(99, CancellationToken.None);
 
-        Assert.IsType<NotFoundResult>(result);
+        Assert.IsType<NotFoundObjectResult>(result);
     }
 
     // ───── Create ─────
@@ -106,7 +119,8 @@ public class SubCategoriesControllerTests
         var createdResult = Assert.IsType<CreatedAtActionResult>(result);
         Assert.Equal(nameof(SubCategoriesController.GetById), createdResult.ActionName);
         Assert.Equal(1, createdResult.RouteValues!["id"]);
-        Assert.Equal(dto, createdResult.Value);
+        var response = Assert.IsType<ApiSuccessResponse<SubCategoryDto>>(createdResult.Value);
+        Assert.Equal(dto, response.Data);
     }
 
     // ───── Update ─────
@@ -122,7 +136,8 @@ public class SubCategoriesControllerTests
         var result = await _controller.Update(1, request, CancellationToken.None);
 
         var okResult = Assert.IsType<OkObjectResult>(result);
-        Assert.Equal(dto, okResult.Value);
+        var response = Assert.IsType<ApiSuccessResponse<SubCategoryDto>>(okResult.Value);
+        Assert.Equal(dto, response.Data);
     }
 
     [Fact]
@@ -134,7 +149,7 @@ public class SubCategoriesControllerTests
 
         var result = await _controller.Update(99, request, CancellationToken.None);
 
-        Assert.IsType<NotFoundResult>(result);
+        Assert.IsType<NotFoundObjectResult>(result);
     }
 
     // ───── Delete ─────
@@ -158,6 +173,6 @@ public class SubCategoriesControllerTests
 
         var result = await _controller.Delete(99, CancellationToken.None);
 
-        Assert.IsType<NotFoundResult>(result);
+        Assert.IsType<NotFoundObjectResult>(result);
     }
 }

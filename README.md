@@ -33,6 +33,9 @@ A clean-architecture REST API built with **ASP.NET Core (.NET 10)**, featuring t
 - [23. Design Patterns Used](#23-design-patterns-used)
 - [24. SQL Migrations](#24-sql-migrations)
 - [25. Supabase Connection Notes](#25-supabase-connection-notes)
+- [26. API Standards](#26-api-standards)
+- [27. Performance Optimizations](#27-performance-optimizations)
+- [28. Structured Logging (Serilog)](#28-structured-logging-serilog)
 
 ---
 
@@ -40,22 +43,38 @@ A clean-architecture REST API built with **ASP.NET Core (.NET 10)**, featuring t
 
 ```
 dot-net-core-rest-api/
+├── Constants/
+│   └── ErrorTypes.cs                     # Centralized RFC 7807 error type URIs
 ├── Controllers/
+│   ├── BaseApiController.cs              # Shared response helpers (ApiOk, ApiNotFound, etc.)
 │   ├── CategoriesController.cs           # Category endpoints (JWT-protected)
 │   └── SubCategoriesController.cs        # SubCategory endpoints (JWT-protected)
 ├── Data/
 │   ├── AppDbContext.cs                    # EF Core DbContext
+│   ├── IUnitOfWork.cs                    # Unit of Work interface (transaction abstraction)
+│   ├── UnitOfWork.cs                     # Unit of Work implementation (Npgsql transactions)
 │   └── Configurations/
 │       └── CategoryConfiguration.cs      # Fluent API table mapping
 ├── Dtos/
 │   ├── CategoryDtos.cs                   # Category request/response records (validated)
-│   └── SubCategoryDtos.cs                # SubCategory request/response records (validated)
+│   └── SubCategoryDtos.cs               # SubCategory request/response records (validated)
 ├── Entities/
 │   ├── Category.cs                       # Category domain model
 │   └── SubCategory.cs                    # SubCategory domain model
+├── Helpers/
+│   ├── CursorHelper.cs                   # Base64 cursor encode/decode for cursor pagination
+│   └── SortHelper.cs                     # SQL ORDER BY builder with column whitelist
+├── Middleware/
+│   ├── GlobalExceptionMiddleware.cs      # Unhandled exception → RFC 7807 response
+│   ├── RequestIdMiddleware.cs            # X-Request-Id header injection
+│   └── RequestLoggingMiddleware.cs       # HTTP request/response logging
 ├── Migrations/
 │   ├── 000_create_categories.sql         # Categories table DDL
 │   └── 001_create_sub_categories.sql     # SubCategories table DDL
+├── Models/
+│   ├── ApiResponse.cs                    # Standardized API response envelope
+│   ├── PagedResult.cs                    # Generic paged result wrapper
+│   └── QueryParameters.cs               # Pagination, filtering & sorting query params
 ├── Repositories/
 │   ├── ICategoryRepository.cs            # Category repository interface
 │   ├── CategoryRepository.cs             # EF Core implementation
@@ -78,6 +97,8 @@ dot-net-core-rest-api/
 │   ├── SubCategoriesIntegrationTests.cs  # Full-stack integration tests
 │   ├── IntegrationTestFactory.cs         # WebApplicationFactory + Testcontainers
 │   └── dot-net-core-rest-api.Tests.csproj
+├── Logs/                                 # Auto-created log files (daily rolling, 30-day retention)
+│   └── log-YYYYMMDD.txt
 ├── Properties/
 │   └── launchSettings.json
 ├── Program.cs                            # Entry point, DI, middleware, security
@@ -124,6 +145,10 @@ dotnet add package System.ComponentModel.Annotations
 
 # OpenAPI support (included by default)
 dotnet add package Microsoft.AspNetCore.OpenApi
+
+# Structured logging with async file sink
+dotnet add package Serilog.AspNetCore
+dotnet add package Serilog.Sinks.Async
 ```
 
 ### Test Project
@@ -690,12 +715,15 @@ using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Database
+// Database — shared NpgsqlDataSource
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException("Database connection string not configured.");
 
-builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
-builder.Services.AddSingleton(NpgsqlDataSource.Create(connectionString));
+var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+var dataSource = dataSourceBuilder.Build();
+
+builder.Services.AddSingleton(dataSource);
+builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(dataSource));
 
 // DI — Repository → Service
 builder.Services.AddScoped<ICategoryRepository, CategoryRepository>();
@@ -791,32 +819,45 @@ The API will be available at `http://localhost:5101`.
 
 | Method | URL | Auth | Description | Request Body |
 |--------|-----|------|-------------|--------------|
-| `GET` | `/api/categories` | Public | Get all categories | — |
-| `GET` | `/api/categories/{id}` | Public | Get by ID | — |
-| `POST` | `/api/categories` | JWT | Create category | `{ "code": "ELEC", "name": "Electronics" }` |
-| `PUT` | `/api/categories/{id}` | JWT | Update category | `{ "code": "UPD", "name": "Updated" }` |
-| `DELETE` | `/api/categories/{id}` | JWT | Delete category | — |
+| `GET` | `/api/v1/categories` | Public | Get all categories | — |
+| `GET` | `/api/v1/categories/{id}` | Public | Get by ID | — |
+| `POST` | `/api/v1/categories` | JWT | Create category | `{ "code": "ELEC", "name": "Electronics" }` |
+| `PUT` | `/api/v1/categories/{id}` | JWT | Update category | `{ "code": "UPD", "name": "Updated" }` |
+| `DELETE` | `/api/v1/categories/{id}` | JWT | Delete category | — |
 
 ### SubCategories (ADO.NET)
 
 | Method | URL | Auth | Description | Request Body |
 |--------|-----|------|-------------|--------------|
-| `GET` | `/api/subcategories` | Public | Get all | — |
-| `GET` | `/api/subcategories/{id}` | Public | Get by ID | — |
-| `GET` | `/api/subcategories/by-category/{categoryId}` | Public | Get by category | — |
-| `POST` | `/api/subcategories` | JWT | Create | `{ "code": "PHONE", "name": "Phones", "categoryId": 1 }` |
-| `PUT` | `/api/subcategories/{id}` | JWT | Update | `{ "name": "Updated" }` |
-| `DELETE` | `/api/subcategories/{id}` | JWT | Delete | — |
+| `GET` | `/api/v1/sub-categories` | Public | Get all | — |
+| `GET` | `/api/v1/sub-categories/{id}` | Public | Get by ID | — |
+| `GET` | `/api/v1/sub-categories/by-category/{categoryId}` | Public | Get by category | — |
+| `POST` | `/api/v1/sub-categories` | JWT | Create | `{ "code": "PHONE", "name": "Phones", "categoryId": 1 }` |
+| `PUT` | `/api/v1/sub-categories/{id}` | JWT | Update | `{ "name": "Updated" }` |
+| `DELETE` | `/api/v1/sub-categories/{id}` | JWT | Delete | — |
+
+### Health Check
+
+| Method | URL | Auth | Description |
+|--------|-----|------|-------------|
+| `GET` | `/health` | Public | Database connectivity check |
 
 ### Test with curl
 
 ```bash
 # Public — no auth needed
-curl http://localhost:5101/api/categories
-curl http://localhost:5101/api/subcategories/by-category/1
+curl http://localhost:5101/api/v1/categories
+curl http://localhost:5101/api/v1/sub-categories/by-category/1
+
+# Public with pagination, filtering & sorting
+curl "http://localhost:5101/api/v1/categories?page=1&limit=10&sort=name:asc"
+curl "http://localhost:5101/api/v1/sub-categories?cursor=eyJpZCI6IDIwfQ==&limit=10"
+
+# Health check
+curl http://localhost:5101/health
 
 # Protected — requires JWT
-curl -X POST http://localhost:5101/api/categories \
+curl -X POST http://localhost:5101/api/v1/categories \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -d '{"code": "ELEC", "name": "Electronics"}'
@@ -1175,9 +1216,12 @@ docker compose up -d
 |---------|-------|---------|
 | **Repository Pattern** | `ICategoryRepository` / `CategoryRepository`, `ISubCategoryRepository` / `SubCategoryRepository` | Abstracts data access; allows swapping EF Core ↔ ADO.NET without changing upper layers |
 | **Service Layer Pattern** | `ICategoryService` / `CategoryService`, `ISubCategoryService` / `SubCategoryService` | Contains business logic; maps between Entities and DTOs |
+| **Unit of Work** | `IUnitOfWork` / `UnitOfWork` | Manages transactions across multiple raw SQL operations |
 | **Dependency Injection** | Constructor injection in all layers via `Program.cs` registrations | Loose coupling; testability via mocking interfaces |
 | **DTO Pattern** | `CategoryDto`, `CreateCategoryRequest`, `UpdateCategoryRequest`, `SubCategoryDto`, etc. | Separates API contract from internal entities; controls what data is exposed |
 | **Interface Segregation** | All layers depend on interfaces (`ICategoryService`, `ICategoryRepository`) | Enables unit testing with mocks; decouples implementation details |
+| **Middleware Pipeline** | `RequestIdMiddleware`, `GlobalExceptionMiddleware`, `RequestLoggingMiddleware` | Cross-cutting concerns (logging, error handling, request tracking) |
+| **Base Controller** | `BaseApiController` | Shared response helpers (`ApiOk`, `ApiNotFound`, `ApiCreated`, `ApiValidationError`) |
 | **Fluent API Configuration** | `CategoryConfiguration` (EF Core `IEntityTypeConfiguration<T>`) | Maps C# PascalCase to PostgreSQL snake_case; defines constraints and indexes |
 | **Factory Pattern** | `IntegrationTestFactory` (`WebApplicationFactory<Program>`) | Spins up the full app + database for integration testing |
 | **Primary Constructor** | All services, repositories, and controllers | Reduces boilerplate; cleaner constructor injection syntax (C# 12+) |
@@ -1221,6 +1265,331 @@ Run these against your database manually or via a migration runner.
 | `42P01: relation "x" does not exist` | PostgreSQL is case-sensitive. Ensure `ToTable("name")` matches the exact table name. |
 | `ObjectDisposedException` | Add `No Reset On Close=true;Multiplexing=false` to the connection string (required for PgBouncer). |
 | Verify table name | `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';` |
+
+---
+
+## 26. API Standards
+
+### 26.1 Standardized Response Format
+
+All API responses follow a consistent envelope structure:
+
+**Success Response:**
+
+```json
+{
+  "success": true,
+  "data": { ... },
+  "meta": {
+    "page": 1,
+    "limit": 20,
+    "total": 100,
+    "cursor": "eyJpZCI6IDIwfQ==",
+    "hasMore": true
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z",
+  "requestId": "0HN8..."
+}
+```
+
+**Error Response (RFC 7807):**
+
+```json
+{
+  "success": false,
+  "error": {
+    "type": "https://tools.ietf.org/html/rfc7231#section-6.5.4",
+    "title": "Not Found",
+    "status": 404,
+    "detail": "Category with id 99 was not found.",
+    "instance": "/api/v1/categories/99"
+  },
+  "timestamp": "2025-01-15T10:30:00.000Z",
+  "requestId": "0HN8..."
+}
+```
+
+### 26.2 URL Conventions
+
+- **Versioned:** All endpoints are prefixed with `/api/v1/`
+- **kebab-case:** Multi-word resources use hyphens: `/api/v1/sub-categories`
+- **Nested resources:** `/api/v1/sub-categories/by-category/{categoryId}`
+
+### 26.3 Pagination
+
+Both **cursor-based** and **offset-based** pagination are supported:
+
+```bash
+# Offset-based (default)
+GET /api/v1/categories?page=2&limit=10
+
+# Cursor-based
+GET /api/v1/categories?cursor=eyJpZCI6IDIwfQ==&limit=10
+```
+
+- Cursor pagination skips the COUNT query for better performance.
+- The `cursor` value is a Base64-encoded JSON object containing the last item's ID.
+
+### 26.4 Filtering & Sorting
+
+```bash
+# Filter by name and code
+GET /api/v1/categories?name=electronics&code=ELEC
+
+# Sort by multiple columns
+GET /api/v1/categories?sort=name:asc,created_at:desc
+
+# Combined
+GET /api/v1/sub-categories?categoryId=1&sort=name:asc&page=1&limit=10
+```
+
+Sorting uses a **column whitelist** to prevent SQL injection. Only known columns are accepted.
+
+### 26.5 Rate Limiting (Token Bucket)
+
+Two tiers configured:
+
+| Tier | Limit | Window | Partition |
+|------|-------|--------|-----------|
+| `standard` | 100 requests | 1 minute | Per IP |
+| `premium` | 1000 requests | 1 minute | Per IP |
+
+Exceeded requests return HTTP 429 with an RFC 7807 error body.
+
+### 26.6 Error Type Constants
+
+All error type URIs are centralized in `Constants/ErrorTypes.cs`:
+
+```csharp
+public static class ErrorTypes
+{
+    public const string NotFound = "https://tools.ietf.org/html/rfc7231#section-6.5.4";
+    public const string Validation = "https://tools.ietf.org/html/rfc7231#section-6.5.1";
+    public const string InternalServerError = "https://tools.ietf.org/html/rfc7231#section-6.6.1";
+    public const string TooManyRequests = "https://tools.ietf.org/html/rfc6585#section-4";
+}
+```
+
+### 26.7 Request ID & Logging
+
+- Every request is tagged with a unique `X-Request-Id` header via `RequestIdMiddleware`.
+- `RequestLoggingMiddleware` logs all HTTP requests at **Information** level (method, path, status, duration).
+- Controller actions log at **Debug** level to avoid duplication with middleware.
+- Service and repository layers log at **Debug** level for detailed tracing.
+- **Warning** level is used for "not found" scenarios in controllers and services.
+
+### 26.8 Health Check
+
+```bash
+GET /health
+```
+
+Returns database connectivity status. Available without authentication.
+
+---
+
+## 27. Performance Optimizations
+
+### 27.1 Shared NpgsqlDataSource
+
+Both EF Core (`AppDbContext`) and raw ADO.NET (`SubCategoryRepository`) share a **single** `NpgsqlDataSource` instance — one connection pool instead of two:
+
+```csharp
+var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+var dataSource = dataSourceBuilder.Build();
+
+builder.Services.AddSingleton(dataSource);
+builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(dataSource));
+```
+
+### 27.2 COUNT Skip for Cursor Pagination
+
+When cursor-based pagination is used, the COUNT query is skipped entirely — the total is returned as `0` since cursor pagination doesn't need it:
+
+```csharp
+var total = string.IsNullOrWhiteSpace(query.Cursor) ? await q.CountAsync(ct) : 0;
+```
+
+### 27.3 Response Compression
+
+Brotli and Gzip compression are enabled for all responses:
+
+```csharp
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<BrotliCompressionProvider>();
+    options.Providers.Add<GzipCompressionProvider>();
+});
+```
+
+### 27.4 Output Caching
+
+Anonymous GET endpoints are cached for 60 seconds using output caching:
+
+```csharp
+builder.Services.AddOutputCache(options =>
+{
+    options.AddBasePolicy(policy => policy.NoCache());
+    options.AddPolicy("CachePublicGet", policy =>
+        policy.Expire(TimeSpan.FromSeconds(60)).Tag("public"));
+});
+```
+
+Controllers apply via attribute: `[OutputCache(PolicyName = "CachePublicGet")]`
+
+### 27.5 Request Timeouts
+
+A 30-second default timeout prevents long-running requests from consuming resources:
+
+```csharp
+builder.Services.AddRequestTimeouts(options =>
+{
+    options.DefaultPolicy = new RequestTimeoutPolicy
+    {
+        Timeout = TimeSpan.FromSeconds(30)
+    };
+});
+```
+
+### 27.6 Unit of Work Pattern
+
+`IUnitOfWork` provides transaction support for raw SQL operations that need atomicity:
+
+```csharp
+await using var uow = serviceProvider.GetRequiredService<IUnitOfWork>();
+await uow.BeginAsync(ct);
+
+try
+{
+    // Multiple operations sharing the same connection and transaction
+    await uow.CommitAsync(ct);
+}
+catch
+{
+    await uow.RollbackAsync(ct);
+    throw;
+}
+```
+
+Registered as `Scoped` — one unit of work per HTTP request.
+
+---
+
+## 28. Structured Logging (Serilog)
+
+### 28.1 Overview
+
+The application uses **Serilog** with an **async file sink** for structured, non-blocking log output. Logs are written to both the console and daily rolling files.
+
+| Feature | Detail |
+|---------|--------|
+| Library | Serilog.AspNetCore 9.0 + Serilog.Sinks.Async 2.1 |
+| Console | Always enabled |
+| File location | `Logs/log-YYYYMMDD.txt` |
+| Rolling | Daily (new file per day) |
+| Size limit | 10 MB per file (rolls to next segment) |
+| Retention | **30 days** — older files are deleted automatically |
+| Async writes | Non-blocking — log calls return immediately, a background thread flushes to disk |
+| Format | `{Timestamp} [{Level}] [{SourceContext}] {Message}{NewLine}{Exception}` |
+
+### 28.2 Configuration (`appsettings.json`)
+
+```json
+{
+  "Serilog": {
+    "Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.File", "Serilog.Sinks.Async" ],
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft.AspNetCore": "Warning",
+        "Microsoft.EntityFrameworkCore": "Warning",
+        "dot_net_core_rest_api": "Information"
+      }
+    },
+    "WriteTo": [
+      { "Name": "Console" },
+      {
+        "Name": "Async",
+        "Args": {
+          "configure": [
+            {
+              "Name": "File",
+              "Args": {
+                "path": "Logs/log-.txt",
+                "rollingInterval": "Day",
+                "retainedFileCountLimit": 30,
+                "fileSizeLimitBytes": 10485760,
+                "rollOnFileSizeLimit": true,
+                "outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{Exception}"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "Enrich": [ "FromLogContext" ]
+  }
+}
+```
+
+### 28.3 Program.cs Integration
+
+```csharp
+using Serilog;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Serilog replaces the built-in logger
+builder.Host.UseSerilog((context, services, configuration) =>
+    configuration.ReadFrom.Configuration(context.Configuration));
+```
+
+All existing `ILogger<T>` injections continue to work — Serilog acts as a drop-in replacement.
+
+### 28.4 Log Retention
+
+| Setting | Value | Effect |
+|---------|-------|--------|
+| `retainedFileCountLimit` | 30 | Files older than 30 days are **deleted automatically** by Serilog |
+| `fileSizeLimitBytes` | 10,485,760 (10 MB) | A new segment file is created if a single day exceeds 10 MB |
+| `rollOnFileSizeLimit` | true | Enables segment creation (e.g., `log-20260411.txt`, `log-20260411_001.txt`) |
+
+### 28.5 Development Override
+
+`appsettings.Development.json` lowers the minimum level to `Debug` for the application namespace:
+
+```json
+{
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Debug",
+      "Override": {
+        "Microsoft.AspNetCore": "Warning",
+        "dot_net_core_rest_api": "Debug"
+      }
+    }
+  }
+}
+```
+
+### 28.6 Sample Log Output
+
+```
+2026-04-11 10:32:15.123 +05:30 [INF] [RequestLoggingMiddleware] HTTP GET /api/v1/categories started | RequestId: req_a1b2c3d4
+2026-04-11 10:32:15.189 +05:30 [INF] [RequestLoggingMiddleware] HTTP GET /api/v1/categories completed 200 in 66ms | RequestId: req_a1b2c3d4
+2026-04-11 10:32:15.400 +05:30 [WRN] [RequestLoggingMiddleware] HTTP GET /api/v1/categories/999 completed 404 in 12ms | RequestId: req_e5f6g7h8
+```
+
+### 28.7 Docker Considerations
+
+In containerized deployments, logs are written to `/app/Logs/` inside the container. To persist logs, mount a volume:
+
+```bash
+docker run -v ./logs:/app/Logs your-image
+```
+
+Alternatively, rely on console output and use a log aggregation tool (ELK, Seq, Datadog).
 
 ---
 

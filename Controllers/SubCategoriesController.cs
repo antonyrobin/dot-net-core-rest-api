@@ -1,25 +1,41 @@
 using dot_net_core_rest_api.Dtos;
+using dot_net_core_rest_api.Models;
 using dot_net_core_rest_api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.OutputCaching;
 
 namespace dot_net_core_rest_api.Controllers;
 
-[ApiController]
-[Route("api/[controller]")]
+[Route("api/v1/sub-categories")]
 [Authorize]
-public class SubCategoriesController(ISubCategoryService subCategoryService) : ControllerBase
+public class SubCategoriesController(ISubCategoryService subCategoryService, ILogger<SubCategoriesController> logger) : BaseApiController
 {
     /// <summary>
-    /// Get all sub-categories.
+    /// Get all sub-categories with pagination, filtering, and sorting.
     /// </summary>
     [HttpGet]
     [AllowAnonymous]
-    [ProducesResponseType<List<SubCategoryDto>>(StatusCodes.Status200OK)]
-    public async Task<IActionResult> GetAll(CancellationToken ct)
+    [OutputCache(PolicyName = "CachePublicGet")]
+    public async Task<IActionResult> GetAll([FromQuery] SubCategoryQueryParameters query, CancellationToken ct)
     {
-        var subCategories = await subCategoryService.GetAllAsync(ct);
-        return Ok(subCategories);
+        logger.LogDebug("GetAll sub-categories requested | RequestId: {RequestId}", GetRequestId());
+        logger.LogDebug("Query: Page={Page}, Limit={Limit}, Sort={Sort}, Name={Name}, Code={Code}, CategoryId={CategoryId}",
+            query.Page, query.Limit, query.Sort, query.Name, query.Code, query.CategoryId);
+
+        var result = await subCategoryService.GetAllAsync(query, ct);
+
+        logger.LogDebug("GetAll sub-categories completed: {Count} items returned | RequestId: {RequestId}",
+            result.Items.Count, GetRequestId());
+
+        return ApiOk(result.Items, new PaginationMeta
+        {
+            Page = query.Page ?? 1,
+            Limit = query.Limit ?? 20,
+            Total = result.Total,
+            Cursor = result.Cursor,
+            HasMore = result.HasMore
+        });
     }
 
     /// <summary>
@@ -27,11 +43,25 @@ public class SubCategoriesController(ISubCategoryService subCategoryService) : C
     /// </summary>
     [HttpGet("by-category/{categoryId:int}")]
     [AllowAnonymous]
-    [ProducesResponseType<List<SubCategoryDto>>(StatusCodes.Status200OK)]
-    public async Task<IActionResult> GetByCategoryId(int categoryId, CancellationToken ct)
+    [OutputCache(PolicyName = "CachePublicGet")]
+    public async Task<IActionResult> GetByCategoryId(int categoryId, [FromQuery] SubCategoryQueryParameters query, CancellationToken ct)
     {
-        var subCategories = await subCategoryService.GetByCategoryIdAsync(categoryId, ct);
-        return Ok(subCategories);
+        logger.LogDebug("GetByCategoryId {CategoryId} requested | RequestId: {RequestId}", categoryId, GetRequestId());
+
+        query.CategoryId = categoryId;
+        var result = await subCategoryService.GetAllAsync(query, ct);
+
+        logger.LogDebug("GetByCategoryId {CategoryId} completed: {Count} items returned | RequestId: {RequestId}",
+            categoryId, result.Items.Count, GetRequestId());
+
+        return ApiOk(result.Items, new PaginationMeta
+        {
+            Page = query.Page ?? 1,
+            Limit = query.Limit ?? 20,
+            Total = result.Total,
+            Cursor = result.Cursor,
+            HasMore = result.HasMore
+        });
     }
 
     /// <summary>
@@ -39,48 +69,75 @@ public class SubCategoriesController(ISubCategoryService subCategoryService) : C
     /// </summary>
     [HttpGet("{id:int}")]
     [AllowAnonymous]
-    [ProducesResponseType<SubCategoryDto>(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [OutputCache(PolicyName = "CachePublicGet")]
     public async Task<IActionResult> GetById(int id, CancellationToken ct)
     {
+        logger.LogDebug("GetById sub-category {SubCategoryId} requested | RequestId: {RequestId}", id, GetRequestId());
+
         var subCategory = await subCategoryService.GetByIdAsync(id, ct);
-        return subCategory is null ? NotFound() : Ok(subCategory);
+
+        if (subCategory is null)
+        {
+            logger.LogWarning("Sub-category {SubCategoryId} not found | RequestId: {RequestId}", id, GetRequestId());
+            return ApiNotFound($"Sub-category with id {id} was not found.");
+        }
+
+        logger.LogDebug("GetById sub-category {SubCategoryId} completed | RequestId: {RequestId}", id, GetRequestId());
+        return ApiOk(subCategory);
     }
 
     /// <summary>
     /// Create a new sub-category.
     /// </summary>
     [HttpPost]
-    [ProducesResponseType<SubCategoryDto>(StatusCodes.Status201Created)]
-    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Create(CreateSubCategoryRequest request, CancellationToken ct)
     {
+        logger.LogDebug("Create sub-category requested: Code={Code} | RequestId: {RequestId}",
+            request.Code, GetRequestId());
+
         var subCategory = await subCategoryService.CreateAsync(request, ct);
-        return CreatedAtAction(nameof(GetById), new { id = subCategory.Id }, subCategory);
+
+        logger.LogDebug("Sub-category created: {SubCategoryId} | RequestId: {RequestId}", subCategory.Id, GetRequestId());
+        return ApiCreated(nameof(GetById), new { id = subCategory.Id }, subCategory);
     }
 
     /// <summary>
     /// Update an existing sub-category.
     /// </summary>
     [HttpPut("{id:int}")]
-    [ProducesResponseType<SubCategoryDto>(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Update(int id, UpdateSubCategoryRequest request, CancellationToken ct)
     {
+        logger.LogDebug("Update sub-category {SubCategoryId} requested | RequestId: {RequestId}", id, GetRequestId());
+
         var subCategory = await subCategoryService.UpdateAsync(id, request, ct);
-        return subCategory is null ? NotFound() : Ok(subCategory);
+
+        if (subCategory is null)
+        {
+            logger.LogWarning("Sub-category {SubCategoryId} not found for update | RequestId: {RequestId}", id, GetRequestId());
+            return ApiNotFound($"Sub-category with id {id} was not found.");
+        }
+
+        logger.LogDebug("Sub-category {SubCategoryId} updated | RequestId: {RequestId}", id, GetRequestId());
+        return ApiOk(subCategory);
     }
 
     /// <summary>
     /// Delete a sub-category by id.
     /// </summary>
     [HttpDelete("{id:int}")]
-    [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
+        logger.LogDebug("Delete sub-category {SubCategoryId} requested | RequestId: {RequestId}", id, GetRequestId());
+
         var deleted = await subCategoryService.DeleteAsync(id, ct);
-        return deleted ? NoContent() : NotFound();
+
+        if (!deleted)
+        {
+            logger.LogWarning("Sub-category {SubCategoryId} not found for deletion | RequestId: {RequestId}", id, GetRequestId());
+            return ApiNotFound($"Sub-category with id {id} was not found.");
+        }
+
+        logger.LogDebug("Sub-category {SubCategoryId} deleted | RequestId: {RequestId}", id, GetRequestId());
+        return NoContent();
     }
 }
