@@ -19,11 +19,20 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
       - name: Restore dependencies
-        run: dotnet restore
+        run: |
+          dotnet restore dot-net-core-rest-api.csproj
+          dotnet restore Tests/dot-net-core-rest-api.Tests.csproj
 
       - name: Check code formatting
-        run: dotnet format --verify-no-changes --verbosity diagnostic
+        run: dotnet format dot-net-core-rest-api.csproj --verify-no-changes --verbosity diagnostic
 
   test:
     name: Tests & Coverage
@@ -36,11 +45,22 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
       - name: Restore dependencies
-        run: dotnet restore
+        run: |
+          dotnet restore dot-net-core-rest-api.csproj
+          dotnet restore Tests/dot-net-core-rest-api.Tests.csproj
 
       - name: Build
-        run: dotnet build --no-restore --configuration Release
+        run: |
+          dotnet build dot-net-core-rest-api.csproj --no-restore --configuration Release
+          dotnet build Tests/dot-net-core-rest-api.Tests.csproj --no-restore --configuration Release
 
       - name: Run tests with coverage
         run: >
