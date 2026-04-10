@@ -1,8 +1,12 @@
+using System.Text;
+using System.Text.Json;
 using dot_net_core_rest_api.Dtos;
 using dot_net_core_rest_api.Entities;
 using dot_net_core_rest_api.Models;
 using dot_net_core_rest_api.Repositories;
 using dot_net_core_rest_api.Services;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 
@@ -11,15 +15,46 @@ namespace dot_net_core_rest_api.Tests;
 public class CategoryServiceTests
 {
     private readonly Mock<ICategoryRepository> _repoMock = new();
+    private readonly Mock<IDistributedCache> _cacheMock = new();
     private readonly Mock<ILogger<CategoryService>> _loggerMock = new();
     private readonly CategoryService _service;
 
     public CategoryServiceTests()
     {
-        _service = new CategoryService(_repoMock.Object, _loggerMock.Object);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Redis:CacheTtlSeconds:GetAll"] = "60",
+                ["Redis:CacheTtlSeconds:GetById"] = "120"
+            })
+            .Build();
+
+        _cacheMock.Setup(c => c.GetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((byte[]?)null);
+
+        _service = new CategoryService(_repoMock.Object, _cacheMock.Object, config, _loggerMock.Object);
     }
 
     // ───── GetAllAsync ─────
+
+    [Fact]
+    public async Task GetAllAsync_CacheHit_ReturnsFromCache()
+    {
+        var cached = new PagedResult<CategoryDto>
+        {
+            Items = [new CategoryDto(1, DateTime.UtcNow, "CAT1", "Alpha")],
+            Total = 1,
+            HasMore = false
+        };
+        _cacheMock.Setup(c => c.GetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(cached)));
+
+        var result = await _service.GetAllAsync(new CategoryQueryParameters(), CancellationToken.None);
+
+        Assert.Single(result.Items);
+        Assert.Equal("CAT1", result.Items[0].Code);
+        _repoMock.Verify(r => r.GetAllAsync(It.IsAny<CategoryQueryParameters>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
 
     [Fact]
     public async Task GetAllAsync_ReturnsMappedDtos()
@@ -51,6 +86,20 @@ public class CategoryServiceTests
     }
 
     // ───── GetByIdAsync ─────
+
+    [Fact]
+    public async Task GetByIdAsync_CacheHit_ReturnsFromCache()
+    {
+        var cached = new CategoryDto(1, DateTime.UtcNow, "CAT1", "Alpha");
+        _cacheMock.Setup(c => c.GetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(cached)));
+
+        var result = await _service.GetByIdAsync(1, CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal("CAT1", result!.Code);
+        _repoMock.Verify(r => r.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
 
     [Fact]
     public async Task GetByIdAsync_ExistingId_ReturnsDto()

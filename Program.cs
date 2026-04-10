@@ -12,11 +12,27 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// ---------- Load .env file (local development secrets) ----------
+var envFile = Path.Combine(builder.Environment.ContentRootPath, ".env");
+if (File.Exists(envFile))
+{
+    foreach (var line in File.ReadAllLines(envFile))
+    {
+        if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#'))
+            continue;
+
+        var parts = line.Split('=', 2);
+        if (parts.Length == 2 && !string.IsNullOrEmpty(parts[1]))
+            Environment.SetEnvironmentVariable(parts[0].Trim(), parts[1].Trim());
+    }
+}
 
 // ---------- Serilog (async file + console logging) ----------
 builder.Host.UseSerilog((context, services, configuration) =>
@@ -41,6 +57,20 @@ builder.Services.AddScoped<ICategoryService, CategoryService>();
 builder.Services.AddScoped<ISubCategoryRepository, SubCategoryRepository>();
 builder.Services.AddScoped<ISubCategoryService, SubCategoryService>();
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
+
+// ---------- Redis Distributed Cache (Upstash REST API) ----------
+var upstashUrl = Environment.GetEnvironmentVariable("UPSTASH_REDIS_REST_URL")
+    ?? builder.Configuration["Redis:RestUrl"]
+    ?? throw new InvalidOperationException("Upstash REST URL not configured. Set UPSTASH_REDIS_REST_URL environment variable.");
+
+var upstashToken = Environment.GetEnvironmentVariable("UPSTASH_REDIS_REST_TOKEN")
+    ?? builder.Configuration["Redis:RestToken"]
+    ?? throw new InvalidOperationException("Upstash REST token not configured. Set UPSTASH_REDIS_REST_TOKEN environment variable.");
+
+var instanceName = builder.Configuration["Redis:InstanceName"] ?? "dotnetapi:";
+
+builder.Services.AddSingleton<IDistributedCache>(
+    new UpstashDistributedCache(upstashUrl, upstashToken, instanceName));
 
 // ---------- JWT Authentication ----------
 var jwtKey = builder.Configuration["Jwt:Key"]
