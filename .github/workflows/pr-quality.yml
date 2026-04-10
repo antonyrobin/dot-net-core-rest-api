@@ -1,0 +1,163 @@
+name: PR Quality Check
+
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+    branches: ["*"]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Code Linting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies
+        run: |
+          dotnet restore dot-net-core-rest-api.csproj
+          dotnet restore Tests/dot-net-core-rest-api.Tests.csproj
+
+      - name: Check code formatting
+        id: format-check
+        run: |
+          set +e
+          OUTPUT=$(dotnet format dot-net-core-rest-api.csproj --verify-no-changes --verbosity diagnostic 2>&1)
+          EXIT_CODE=$?
+          echo "$OUTPUT"
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+          # Count files that would be formatted
+          CHANGED=$(echo "$OUTPUT" | grep -c "would be formatted" || true)
+          echo "changed_files=$CHANGED" >> "$GITHUB_OUTPUT"
+          exit $EXIT_CODE
+
+      - name: Generate linting summary
+        if: always()
+        run: |
+          echo "## 🔍 Code Linting Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.format-check.outputs.exit_code }}" = "0" ]; then
+            echo "✅ **All files are properly formatted** — no changes needed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ **Formatting issues detected** — run \`dotnet format\` to fix." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Detail | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Tool | \`dotnet format\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Project | \`dot-net-core-rest-api.csproj\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Status | $( [ '${{ steps.format-check.outputs.exit_code }}' = '0' ] && echo '✅ Passed' || echo '❌ Failed' ) |" >> "$GITHUB_STEP_SUMMARY"
+
+  test:
+    name: Tests & Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies
+        run: |
+          dotnet restore dot-net-core-rest-api.csproj
+          dotnet restore Tests/dot-net-core-rest-api.Tests.csproj
+
+      - name: Build
+        run: |
+          dotnet build dot-net-core-rest-api.csproj --no-restore --configuration Release
+          dotnet build Tests/dot-net-core-rest-api.Tests.csproj --no-restore --configuration Release
+
+      - name: Run tests with coverage
+        id: test-run
+        run: |
+          set +e
+          OUTPUT=$(dotnet test Tests/dot-net-core-rest-api.Tests.csproj \
+            --no-build \
+            --configuration Release \
+            --verbosity normal \
+            --logger "trx;LogFileName=test-results.trx" \
+            /p:CollectCoverage=true \
+            /p:CoverletOutputFormat=cobertura \
+            /p:CoverletOutput=../coverage/coverage.cobertura.xml \
+            /p:ThresholdType=line \
+            /p:Threshold=95 2>&1)
+          EXIT_CODE=$?
+          echo "$OUTPUT"
+
+          # Extract test counts
+          TOTAL=$(echo "$OUTPUT" | grep -oP 'Total tests: \K[0-9]+' || echo "0")
+          PASSED=$(echo "$OUTPUT" | grep -oP '^\s+Passed: \K[0-9]+' || echo "0")
+          FAILED=$(echo "$OUTPUT" | grep -oP '^\s+Failed: \K[0-9]+' || echo "0")
+          SKIPPED=$(echo "$OUTPUT" | grep -oP '^\s+Skipped: \K[0-9]+' || echo "0")
+
+          # Extract coverage percentages
+          LINE_COV=$(echo "$OUTPUT" | grep -A5 '| Total' | grep 'Total' | awk -F'|' '{print $2}' | xargs || echo "N/A")
+          BRANCH_COV=$(echo "$OUTPUT" | grep -A5 '| Total' | grep 'Total' | awk -F'|' '{print $3}' | xargs || echo "N/A")
+          METHOD_COV=$(echo "$OUTPUT" | grep -A5 '| Total' | grep 'Total' | awk -F'|' '{print $4}' | xargs || echo "N/A")
+
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+          echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
+          echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
+          echo "skipped=$SKIPPED" >> "$GITHUB_OUTPUT"
+          echo "line_cov=$LINE_COV" >> "$GITHUB_OUTPUT"
+          echo "branch_cov=$BRANCH_COV" >> "$GITHUB_OUTPUT"
+          echo "method_cov=$METHOD_COV" >> "$GITHUB_OUTPUT"
+          exit $EXIT_CODE
+
+      - name: Generate test and coverage summary
+        if: always()
+        run: |
+          echo "## 🧪 Test Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.test-run.outputs.exit_code }}" = "0" ]; then
+            echo "✅ **All tests passed**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ **Test run failed**" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Count |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Total | ${{ steps.test-run.outputs.total }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ✅ Passed | ${{ steps.test-run.outputs.passed }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ❌ Failed | ${{ steps.test-run.outputs.failed }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ⏭️ Skipped | ${{ steps.test-run.outputs.skipped }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "## 📊 Code Coverage" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Coverage |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|----------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Line | ${{ steps.test-run.outputs.line_cov }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Branch | ${{ steps.test-run.outputs.branch_cov }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Method | ${{ steps.test-run.outputs.method_cov }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Detail | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Threshold | 95% (line) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Format | Cobertura |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Status | $( [ '${{ steps.test-run.outputs.exit_code }}' = '0' ] && echo '✅ Passed' || echo '❌ Failed' ) |" >> "$GITHUB_STEP_SUMMARY"
