@@ -37,6 +37,7 @@ A clean-architecture REST API built with **ASP.NET Core (.NET 10)**, featuring t
 - [27. Performance Optimizations](#27-performance-optimizations)
 - [28. Structured Logging (Serilog)](#28-structured-logging-serilog)
 - [29. Redis Caching (Distributed Cache)](#29-redis-caching-distributed-cache)
+- [30. Load Testing (k6)](#30-load-testing-k6)
 
 ---
 
@@ -1721,6 +1722,82 @@ _cacheMock.Setup(c => c.GetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>
 _service = new CategoryService(
     _repoMock.Object, _cacheMock.Object, config, _loggerMock.Object);
 ```
+
+---
+
+## 30. Load Testing (k6)
+
+The project includes a comprehensive load test suite using **[k6](https://k6.io/)** by Grafana Labs.
+
+### 30.1 Installation
+
+```powershell
+# Windows (winget)
+winget install GrafanaLabs.k6
+
+# macOS
+brew install k6
+
+# Verify
+k6 version
+```
+
+### 30.2 Test Scripts
+
+| Script | Endpoints Tested | Auth Required |
+|--------|-----------------|---------------|
+| `LoadTests/categories.js` | GET/POST/PUT/DELETE /api/v1/categories | CRUD only |
+| `LoadTests/sub-categories.js` | GET/POST/PUT/DELETE /api/v1/sub-categories | CRUD only |
+| `LoadTests/full-flow.js` | Health → Categories → SubCategories → Pagination → CRUD | CRUD only |
+
+### 30.3 Quick Start
+
+```powershell
+# 1. Start the API
+dotnet run
+
+# 2. Smoke test (read-only, no JWT needed)
+k6 run --env PROFILE=smoke LoadTests/categories.js
+
+# 3. Average load test
+k6 run --env PROFILE=average LoadTests/categories.js
+
+# 4. With CRUD (generate JWT first)
+node LoadTests/generate-token.js
+k6 run --env PROFILE=average --env JWT_TOKEN="paste-token" LoadTests/full-flow.js
+```
+
+### 30.4 Test Profiles
+
+| Profile | VUs | Duration | Purpose |
+|---------|-----|----------|--------|
+| `smoke` | 1 | 30s | Verify the system works |
+| `average` | 20 | 2 min | Typical production traffic |
+| `stress` | 50 → 200 | 3.5 min | Find the breaking point |
+| `spike` | 10 → 300 | 1.5 min | Sudden traffic burst |
+| `soak` | 30 | 12 min | Detect memory leaks |
+
+### 30.5 Key Metrics
+
+| Metric | Description |
+|--------|------------|
+| `http_req_duration` | Response time — avg, p(90), p(95), p(99) |
+| `http_req_failed` | Percentage of non-2xx responses |
+| `http_reqs` | Total requests and throughput (req/s) |
+| `checks` | Pass/fail rate of assertions |
+| Custom trends | `category_list_duration`, `category_get_by_id_duration`, etc. |
+
+### 30.6 Export Results
+
+```powershell
+# JSON
+k6 run --out json=results.json LoadTests/categories.js
+
+# CSV
+k6 run --out csv=results.csv LoadTests/categories.js
+```
+
+> Full documentation: [`LoadTests/README.md`](LoadTests/README.md)
 
 ---
 
