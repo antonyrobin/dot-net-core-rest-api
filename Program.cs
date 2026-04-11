@@ -58,19 +58,24 @@ builder.Services.AddScoped<ISubCategoryRepository, SubCategoryRepository>();
 builder.Services.AddScoped<ISubCategoryService, SubCategoryService>();
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
-// ---------- Redis Distributed Cache (Upstash REST API) ----------
+// ---------- Distributed Cache (Upstash REST API → fallback: in-memory) ----------
 var upstashUrl = Environment.GetEnvironmentVariable("UPSTASH_REDIS_REST_URL")
-    ?? builder.Configuration["Redis:RestUrl"]
-    ?? throw new InvalidOperationException("Upstash REST URL not configured. Set UPSTASH_REDIS_REST_URL environment variable.");
+    ?? builder.Configuration["Redis:RestUrl"];
 
 var upstashToken = Environment.GetEnvironmentVariable("UPSTASH_REDIS_REST_TOKEN")
-    ?? builder.Configuration["Redis:RestToken"]
-    ?? throw new InvalidOperationException("Upstash REST token not configured. Set UPSTASH_REDIS_REST_TOKEN environment variable.");
+    ?? builder.Configuration["Redis:RestToken"];
 
 var instanceName = builder.Configuration["Redis:InstanceName"] ?? "dotnetapi:";
 
-builder.Services.AddSingleton<IDistributedCache>(
-    new UpstashDistributedCache(upstashUrl, upstashToken, instanceName));
+if (!string.IsNullOrEmpty(upstashUrl) && !string.IsNullOrEmpty(upstashToken))
+{
+    builder.Services.AddSingleton<IDistributedCache>(
+        new UpstashDistributedCache(upstashUrl, upstashToken, instanceName));
+}
+else
+{
+    builder.Services.AddDistributedMemoryCache();
+}
 
 // ---------- JWT Authentication ----------
 var jwtKey = builder.Configuration["Jwt:Key"]
